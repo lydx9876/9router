@@ -127,6 +127,10 @@ export const KIMCHI_CONFIG = { ...PROVIDER_OAUTH["kimchi"] };
 // Endpoint: cli-chat-proxy.grok.com — same client_id as xai, different flow + scopes
 export const GROK_CLI_CONFIG = { ...PROVIDER_OAUTH["grok-cli"] };
 
+// Muse — subscription device code flow to auth.meta.com, no refresh
+// (Meta rejects refresh_token grants; the minted Model API key never expires).
+export const MUSE_CONFIG = { ...PROVIDER_OAUTH["muse"] };
+
 // Trae (ByteDance marscode) OAuth — authorization_code flow with local callback.
 //   1) POST GetLoginGuidance {loginTraceID} → {Result.LoginHost}
 //   2) Browser opens ${loginHost}/authorization?client_id=...&login_trace_id=...&auth_callback_url=${cb}

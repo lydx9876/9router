@@ -5,7 +5,7 @@ import {
   markAccountUnavailable,
   clearAccountError,
   extractApiKey,
-  checkApiKeyQuota,
+  isValidApiKey,
 } from "../services/auth.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
 import { getSettings } from "@/lib/localDb";
@@ -68,13 +68,18 @@ export async function handleChat(request, clientRawRequest = null) {
     log.debug("AUTH", "No API key provided (local mode)");
   }
 
-  // API key gate: a known key is subject to its own pause/quota limits even
-  // when keys are not required; an unknown key passes only in local mode.
+  // Enforce API key if enabled in settings
   const settings = await getSettings();
-  const keyGate = await checkApiKeyQuota(apiKey, settings.requireApiKey);
-  if (keyGate) {
-    log.warn("AUTH", `${keyGate.error} (key=${log.maskKey(apiKey)})`);
-    return errorResponse(keyGate.status, keyGate.error);
+  if (settings.requireApiKey) {
+    if (!apiKey) {
+      log.warn("AUTH", "Missing API key (requireApiKey=true)");
+      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Missing API key");
+    }
+    const valid = await isValidApiKey(apiKey);
+    if (!valid) {
+      log.warn("AUTH", "Invalid API key (requireApiKey=true)");
+      return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
+    }
   }
 
   if (!modelStr) {

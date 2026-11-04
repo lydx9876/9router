@@ -67,6 +67,10 @@ const STATS_RESPONSE = {
     },
   ],
   model_metrics: [],
+  // end_date 是失效日（exclusive）：有效区间 [2026-11-02, 2026-12-03)，
+  // 即最后有效日 2026-12-02 23:59 —— 与控制台「套餐及积分包」显示的一致。
+  start_date: "2026-11-02",
+  end_date: "2026-12-03",
   package: {
     spec_code: "codearts.agent.individual.trial",
     status: "normal",
@@ -132,13 +136,26 @@ describe("getCodeArtsUsage", () => {
     expect(result.quotas["Token Package"]).toMatchObject({ used: 1200, total: 100000 });
   });
 
-  it("never invents a reset time — the endpoint exposes no expiry", async () => {
+  it("uses the package end date as the expiry — and treats end_date as exclusive", async () => {
     stubFetch(STATS_RESPONSE);
     const result = await getCodeArtsUsage(PSD);
-    for (const quota of Object.values(result.quotas)) {
-      expect(quota.resetAt).toBeNull();
-      expect(quota.recurring).toBe(false);
-    }
+    const quota = result.quotas["Total Credits"];
+    expect(quota.resetAt).not.toBeNull();
+    // end_date = 2026-12-03 → 最后有效日 2026-12-02 23:59:59.999 本地时间
+    const local = new Date(quota.resetAt);
+    expect(local.getFullYear()).toBe(2026);
+    expect(local.getMonth()).toBe(11); // December (0-based)
+    expect(local.getDate()).toBe(2);
+    expect(local.getHours()).toBe(23);
+    expect(local.getMinutes()).toBe(59);
+    // 积分过期后不会自动补充 → UI 必须说 "Expires" 而不是 "Reset"
+    expect(quota.recurring).toBe(false);
+  });
+
+  it("leaves the expiry unset when the endpoint omits end_date", async () => {
+    stubFetch({ ...STATS_RESPONSE, end_date: undefined });
+    const result = await getCodeArtsUsage(PSD);
+    expect(result.quotas["Total Credits"].resetAt).toBeNull();
   });
 
   it("skips zero-total packages instead of showing empty bars", async () => {

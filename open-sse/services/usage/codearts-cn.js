@@ -14,6 +14,16 @@
  *   is_credit_package / is_token_package  积分套餐还是 token 套餐
  *   spec_code                          套餐规格码
  *
+ * 顶层还有 start_date / end_date（YYYY-MM-DD），是**套餐的生效/到期日**。
+ * 控制台「套餐及积分包」页面显示的到期时间就是这个 —— 实测截图里的
+ * “个人订阅套餐 … 到期 2026/12/02 23:59” 对应接口的 end_date = "2026-12-03"
+ * （日期型，结束于当天 23:59:59）。
+ *
+ * ⚠️ 逐笔积分包的独立到期时间（如“每日签到领100积分”那一笔的次日到期）
+ * **只有** /chat/snap-manager/v1/package/overview 能给，而那个接口走 IAM SSO
+ * Cookie：用AK/SK 调用会被重定向到 auth.huaweicloud.com 登录页（响应头
+ * hw-ajax-redirect），拿不到数据。所以这里只能给套餐级的到期日。
+ *
  * metrics 里是各个额度包，**积分包**字段：
  *   package_credit_amount              总额度
  *   package_credit_used                已用
@@ -33,8 +43,8 @@
  * 展示会得出 537419/1 的荒谬比例。所以 token 包只在 package_token_amount > 1
  * 时才作为配额展示，否则跳过。
  *
- * ⚠️ 接口**不返回**积分的过期时间，所以 resetAt 只能留 null —— UI 会显示
- * "无重置时间"而不是编造一个。这是有意的：宁可少显示，也不要显示错的到期时间。
+ * ⚠️ 接口**不返回**每一笔积分包的过期时间，所以 resetAt 用套餐级的 end_date
+ * 作为锚点，而不是逐笔的真实到期日。宁可少显示，也不要显示错的到期时间。
  */
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
@@ -55,6 +65,28 @@ const CREDIT_METRICS = [
 function num(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * 把 "2026-12-03" 这样的日期型 end_date 转成 ISO 时间戳。
+ *
+ * end_date 是**失效日**（exclusive）：有效区间是 [start_date, end_date)。
+ * 控制台「套餐及积分包」显示的到期时间正是这么算的 ——
+ * end_date = "2026-12-03" 对应页面上的「到期 2026/12/02 23:59」，
+ * 即最后有效日当天 23:59:59。
+ */
+function parseEndDate(endDate) {
+  if (!endDate) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(endDate).trim());
+  if (!m) {
+    // 已经是完整时间戳就直接用
+    const d = new Date(endDate);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+  }
+  const [, y, mo, day] = m;
+  // 减一天：end_date 当天已失效，最后有效日是前一天。
+  const d = new Date(Number(y), Number(mo) - 1, Number(day) - 1, 23, 59, 59, 999);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
 export async function getCodeArtsUsage(providerSpecificData = {}, proxyOptions = null) {
@@ -105,6 +137,9 @@ export async function getCodeArtsUsage(providerSpecificData = {}, proxyOptions =
   const byName = new Map(metrics.map((m) => [m?.name, m]));
   const quotas = {};
 
+  // 套餐级到期日（逐笔积分包的到期时间只有 Cookie 接口能给，见文件头说明）
+  const expiresAt = parseEndDate(json?.end_date);
+
   for (const [metricName, label] of CREDIT_METRICS) {
     const m = byName.get(metricName);
     if (!m || m.show === false) continue;
@@ -113,9 +148,9 @@ export async function getCodeArtsUsage(providerSpecificData = {}, proxyOptions =
     quotas[label] = {
       used: num(m.package_credit_used),
       total,
-      // The endpoint exposes no expiry timestamp for credit packages. Leaving
-      // resetAt null makes the UI say "no reset" rather than invent a date.
-      resetAt: null,
+      // 套餐到期日。recurring:false → UI 显示 "Expires in" 而不是 "Reset in"，
+      // 因为积分过期后不会自动补充。
+      resetAt: expiresAt,
       unlimited: false,
       recurring: false,
     };
@@ -131,7 +166,7 @@ export async function getCodeArtsUsage(providerSpecificData = {}, proxyOptions =
       quotas["Token Package"] = {
         used: num(tokenPack.usage_token_num),
         total,
-        resetAt: null,
+        resetAt: expiresAt,
         unlimited: false,
         recurring: false,
       };

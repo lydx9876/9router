@@ -11,6 +11,8 @@ export default {
     website: "https://codearts.huaweicloud.com",
     notice: {
       signupUrl: "https://codearts.huaweicloud.com/portal/settings/cli-auth",
+      // 提醒用户当前的状态，避免建好连接后才发现 chat 不可用。
+      apiKeyUrl: "https://codearts.huaweicloud.com/portal/settings/cli-auth",
     },
   },
   category: "apikey",
@@ -32,6 +34,11 @@ export default {
     },
     timeoutMs: 180000,
     stallTimeoutMs: 180000,
+    // 码道对每账号只允许 3 个并发会话，超出返回 400 TM.00001041。
+    // 由 executor 的 computeRetryDelay 识别该错误并退避重试（普通 400 不重试）。
+    retry: {
+      400: { attempts: 8, delayMs: 10000 },
+    },
     // 配额接口：AK/SK 签名即可，不需要 Web 会话 Cookie
     usage: {
       url: "https://snap-access.cn-north-4.myhuaweicloud.com/snap-manager/v1/statistics/plugin",

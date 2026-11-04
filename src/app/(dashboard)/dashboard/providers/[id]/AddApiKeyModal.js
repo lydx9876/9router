@@ -321,6 +321,20 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
         {usesCodeartsCredentialForm && (
           <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20 flex flex-col gap-3">
             <h3 className="font-semibold text-sm">华为云 IAM 凭据</h3>
+            <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs leading-relaxed">
+              <p className="font-medium text-amber-600 dark:text-amber-400 mb-1">
+                ⚠️ 聊天接口暂不可用
+              </p>
+              <p>
+                码道现在要求请求体经SM4-GCM 加密（先做一次key-exchange 换取会话密钥）。
+                签名部分已实现并与官方 CLI 逐字节一致，但加密层尚未完成，因此
+                chat 请求会返回 401 <code>verify ak sk signature fail</code>（该提示有误导性，
+                签名本身是对的）。
+              </p>
+              <p className="mt-1">
+                <strong>配额跟踪不受影响</strong>，可在 Usage 面板确认凭据是否有效。
+              </p>
+            </div>
             <Input
               label="Access Key ID"
               value={codeartsData.accessKeyId}

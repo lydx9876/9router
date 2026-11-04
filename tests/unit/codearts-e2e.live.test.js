@@ -9,11 +9,16 @@ import { PROVIDERS } from "../../open-sse/providers/index.js";
  * 模拟 getProviderCredentials() → executor → snap-access 网关 → SSE 聚合，
  * 确认凭据能从 connection 的 providerSpecificData 一路走到上游并拿到回答。
  *
+ * ⚠️ 目前 chat 请求是禁用的（上游要求 body 经 SM4-GCM 加密，未实现），
+ * 所以这个测试默认跳过。加密层落地后，把 CODEARTS_ENABLE_ENCRYPTED_BODY=1
+ * 传上即可真正跑起来。
+ *
  * 凭据来自环境变量 CODEARTS_AK / CODEARTS_SK；未设置时跳过（避免把密钥写进仓库）。
  */
 const AK = process.env.CODEARTS_AK;
 const SK = process.env.CODEARTS_SK;
-const hasCreds = !!(AK && SK);
+const ENCRYPTED = process.env.CODEARTS_ENABLE_ENCRYPTED_BODY === "1";
+const hasCreds = !!(AK && SK && ENCRYPTED);
 
 describe("codearts-cn end-to-end", () => {
   it.skipIf(!hasCreds)("signs with AK/SK and gets an answer from the CodeArts gateway", async () => {

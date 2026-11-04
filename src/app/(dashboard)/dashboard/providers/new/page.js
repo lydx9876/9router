@@ -183,6 +183,20 @@ export default function NewProviderPage() {
           {/* 华为云 IAM 凭据（码道用 AK/SK 签名，不用 Bearer API Key） */}
           {formData.authMethod === "api_key" && usesCodeartsCredentialForm && (
             <div className="flex flex-col gap-3">
+              <div className="p-3 rounded-md border border-amber-500/40 bg-amber-500/10 text-xs leading-relaxed">
+                <p className="font-medium text-amber-600 dark:text-amber-400 mb-1">
+                  ⚠️ 聊天接口暂不可用
+                </p>
+                <p>
+                  码道现在要求请求体经 SM4-GCM 加密（先做一次 key-exchange 换取会话密钥）。
+                  签名部分已实现并与官方 CLI 逐字节一致，但加密层尚未完成，因此
+                  chat 请求会返回 401 <code>verify ak sk signature fail</code>（该提示有误导性，
+                  签名本身是对的）。
+                </p>
+                <p className="mt-1">
+                  <strong>配额跟踪不受影响</strong>，可在 Usage 面板确认凭据是否有效。
+                </p>
+              </div>
               <Input
                 label="Access Key ID"
                 placeholder="HPUA••••••••••••••••"

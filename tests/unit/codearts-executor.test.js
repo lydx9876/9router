@@ -74,36 +74,54 @@ describe("codearts-cn executor", () => {
     ).toThrow(/accessKeyId and secretAccessKey/);
   });
 
-  it("probe distinguishes a bad AK/SK from a working one", async () => {
+  it("probe reports 'not ready' instead of blaming the credentials", async () => {
     const executor = new CodeArtsExecutor();
     const psd = {
       accessKeyId: "AKIDEXAMPLE",
       secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
     };
 
-    // A stubbed 401 carrying the gateway's signature error must not read as "valid".
-    const rejected = await executor.probeCredentials(
+    // 加密层未实现时，chat 端点对明文一律 401。这个信号不能用来判定
+    // 凭据无效 —— 签名本身是对的（canonicalRequestHash 与官方 CLI 一致）。
+    // 所以 probe 必须直说“功能未就绪”，而不是报“凭据错误”。
+    const notReady = await executor.probeCredentials(
       { providerSpecificData: psd },
       async () =>
         new Response(JSON.stringify({ error_msg: "verify ak sk signature fail" }), {
           status: 401,
         }),
     );
-    expect(rejected.valid).toBe(false);
-    expect(rejected.error).toMatch(/AK\/SK/i);
-
-    // A concurrency-limit rejection still means the credentials are good.
-    const saturated = await executor.probeCredentials(
-      { providerSpecificData: psd },
-      async () =>
-        new Response(JSON.stringify({ error_msg: "并发会话数已达上限(3个)" }), { status: 400 }),
-    );
-    expect(saturated.valid).toBe(true);
+    expect(notReady.valid).toBe(false);
+    expect(notReady.error).toMatch(/SM4-GCM/);
+    expect(notReady.error).not.toMatch(/Invalid AK\/SK/);
 
     const missing = await executor.probeCredentials(
       { providerSpecificData: {} },
       async () => new Response("", { status: 400 }),
     );
     expect(missing.valid).toBe(false);
-    expect(missing.error).toMatch(/required/);  });
+    expect(missing.error).toMatch(/required/);
+  });
+
+  it("execute refuses to send an unencrypted body, with an actionable message", async () => {
+    const executor = new CodeArtsExecutor();
+    const psd = {
+      accessKeyId: "AKIDEXAMPLE",
+      secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+    };
+    await expect(
+      executor.execute({
+        model: "deepseek-v4.1-flash-1017",
+        body: {
+          model: "deepseek-v4.1-flash-1017",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        },
+        stream: true,
+        credentials: { provider: "codearts-cn", providerSpecificData: psd },
+        log: null,
+        proxyOptions: null,
+      }),
+    ).rejects.toThrow(/SM4-GCM/);
+  });
 });

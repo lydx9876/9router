@@ -660,6 +660,23 @@ export function parseQuotaData(provider, data) {
         }
         break;
 
+      case "codearts-cn":
+        // 华为云码道：积分包（总额/基础/赠送/按量）。
+        // recurring 固定 false —— 接口不返回过期时间，resetAt 为 null，
+        // UI 会显示“无重置时间”而不是编一个到期日。
+        if (data.quotas) {
+          Object.entries(data.quotas).forEach(([name, quota]) => {
+            normalizedQuotas.push({
+              name,
+              used: quota.used || 0,
+              total: quota.total || 0,
+              resetAt: quota.resetAt || null,
+              recurring: false,
+            });
+          });
+        }
+        break;
+
       case "grok-cli":
         // Grok Build credits (on-demand window + prepaid balance).
         // Do NOT forward absolute `remaining` — getRemainingPercentage treats

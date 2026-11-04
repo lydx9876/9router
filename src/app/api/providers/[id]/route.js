@@ -5,7 +5,7 @@ import {
   updateProviderConnection,
   deleteProviderConnection,
 } from "@/models";
-import { toProviderConnectionResponse, usesAwsCredentialForm } from "@/lib/providerConnectionResponse";
+import { toProviderConnectionResponse, usesAwsCredentialForm, usesCodeartsCredentialForm } from "@/lib/providerConnectionResponse";
 
 function normalizeProxyConfig(body = {}) {
   const hasAnyProxyField =
@@ -131,10 +131,15 @@ export async function PUT(request, { params }) {
     ) {
       const incomingProviderSpecificData = { ...(providerSpecificData || {}) };
       const isAwsCredential = usesAwsCredentialForm(existing.provider);
+      const isCodeartsCredential = usesCodeartsCredentialForm(existing.provider);
       // The edit form cannot read the stored token back. An empty password field means
       // keep the saved credential; null explicitly removes it.
       if (isAwsCredential && incomingProviderSpecificData.sessionToken === "") {
         delete incomingProviderSpecificData.sessionToken;
+      }
+      // 华为云 SK 同理：表单不回显，留空表示沿用已存的密钥
+      if (isCodeartsCredential && incomingProviderSpecificData.secretAccessKey === "") {
+        delete incomingProviderSpecificData.secretAccessKey;
       }
       updateData.providerSpecificData = {
         ...(existing.providerSpecificData || {}),

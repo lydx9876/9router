@@ -23,6 +23,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   });
   const [cloudflareData, setCloudflareData] = useState({ accountId: "" });
   const [awsData, setAwsData] = useState({ profile: "", region: "", accessKeyId: "", sessionToken: "" });
+  const [codeartsData, setCodeartsData] = useState({ accessKeyId: "", secretAccessKey: "", securityToken: "" });
   const [clearAwsSessionToken, setClearAwsSessionToken] = useState(false);
   const [region, setRegion] = useState("");
   const [testing, setTesting] = useState(false);
@@ -60,6 +61,16 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
         });
         setClearAwsSessionToken(false);
       }
+      if (AI_PROVIDERS?.[connection.provider]?.credentialForm === "codearts") {
+        const psd = connection.providerSpecificData || {};
+        setCodeartsData({
+          accessKeyId: psd.accessKeyId || "",
+          // The secret never comes back from the API (it is write-only), so the field
+          // starts empty and an empty submit keeps the stored one.
+          secretAccessKey: "",
+          securityToken: psd.securityToken || "",
+        });
+      }
       // Load region for providers that support it (e.g. xiaomi-tokenplan)
       const providerCfg = AI_PROVIDERS?.[connection.provider];
       if (providerCfg?.regions) {
@@ -75,6 +86,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
   const isAzure = connection?.provider === "azure";
   const isCloudflareAi = connection?.provider === "cloudflare-ai";
   const usesAwsCredentialForm = AI_PROVIDERS?.[connection?.provider]?.credentialForm === "aws";
+  const usesCodeartsCredentialForm = AI_PROVIDERS?.[connection?.provider]?.credentialForm === "codearts";
   const isCompatible = connection
     ? (isOpenAICompatibleProvider(connection.provider) || isAnthropicCompatibleProvider(connection.provider))
     : false;
@@ -93,6 +105,13 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
     region: awsData.region.trim(),
     accessKeyId: awsData.accessKeyId.trim(),
     sessionToken: clearAwsSessionToken ? null : awsData.sessionToken.trim(),
+  });
+
+  // 华为云 AK/SK。secret 是 write-only：留空表示沿用已存的密文。
+  const buildCodeartsSpecificData = () => ({
+    accessKeyId: codeartsData.accessKeyId.trim(),
+    ...(codeartsData.secretAccessKey.trim() ? { secretAccessKey: codeartsData.secretAccessKey.trim() } : {}),
+    ...(codeartsData.securityToken.trim() ? { securityToken: codeartsData.securityToken.trim() } : {}),
   });
 
   const handleTest = async () => {
@@ -124,6 +143,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
           ...(isAzure ? { providerSpecificData: azureData } : {}),
           ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
           ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
+          ...(usesCodeartsCredentialForm ? { providerSpecificData: buildCodeartsSpecificData() } : {}),
           ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
         }),
       });
@@ -160,6 +180,7 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 ...(isAzure ? { providerSpecificData: azureData } : {}),
                 ...(isCloudflareAi ? { providerSpecificData: cloudflareData } : {}),
                 ...(usesAwsCredentialForm ? { providerSpecificData: buildAwsSpecificData() } : {}),
+                ...(usesCodeartsCredentialForm ? { providerSpecificData: buildCodeartsSpecificData() } : {}),
                 ...(providerRegions ? { providerSpecificData: buildRegionSpecificData() } : {}),
               }),
             });
@@ -193,6 +214,9 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
       }
       if (usesAwsCredentialForm) {
         updates.providerSpecificData = buildAwsSpecificData();
+      }
+      if (usesCodeartsCredentialForm) {
+        updates.providerSpecificData = buildCodeartsSpecificData();
       }
       // Persist updated region for region-aware providers
       if (providerRegions && region) {
@@ -334,6 +358,36 @@ export default function EditConnectionModal({ isOpen, connection, proxyPools, on
                 />
                 Remove saved session token
               </label>
+            </div>
+          </div>
+        )}
+
+        {usesCodeartsCredentialForm && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20">
+            <h3 className="font-semibold mb-3 text-sm">华为云 IAM 凭据</h3>
+            <div className="flex flex-col gap-3">
+              <Input
+                label="Access Key ID"
+                value={codeartsData.accessKeyId}
+                onChange={(e) => setCodeartsData({ ...codeartsData, accessKeyId: e.target.value })}
+                placeholder="HPUA••••••••••••••••"
+                hint="在 https://codearts.huaweicloud.com/portal/settings/cli-auth 申请"
+              />
+              <Input
+                label="Secret Access Key"
+                type="password"
+                value={codeartsData.secretAccessKey}
+                onChange={(e) => setCodeartsData({ ...codeartsData, secretAccessKey: e.target.value })}
+                placeholder="••••••••••••••••"
+                hint="留空则沿用已保存的密钥"
+              />
+              <Input
+                label="Security Token（仅临时凭据需要）"
+                type="password"
+                value={codeartsData.securityToken}
+                onChange={(e) => setCodeartsData({ ...codeartsData, securityToken: e.target.value })}
+                placeholder="留空"
+              />
             </div>
           </div>
         )}

@@ -7,6 +7,7 @@ import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-t
 import { buildCommandCodeHeaders } from "open-sse/shared/commandCodeHeaders.js";
 import { resolveQoderCredentials, resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
+import { CodeArtsExecutor } from "open-sse/executors/codearts-cn.js";
 import {
   createNousApiKeyProbe,
   getNousApiKeyValidationError,
@@ -249,6 +250,11 @@ export async function POST(request) {
       // would reject bedrock outright and send bedrock-xai to a literal "{region}" host.
       if (AI_PROVIDERS[provider]?.credentialForm === "aws") {
         return NextResponse.json(await probeBedrockCredentials({ apiKey, providerSpecificData }, fetch));
+      }
+
+      // 华为云码道同样没有 bearer key —— 只认 IAM 签名，通用探测会一律 401。
+      if (AI_PROVIDERS[provider]?.credentialForm === "codearts") {
+        const result = await new CodeArtsExecutor().probeCredentials({ providerSpecificData }, fetch);        return NextResponse.json(result);
       }
 
       // Generic probe for webSearch/webFetch providers (config-driven)

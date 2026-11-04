@@ -4,6 +4,7 @@ import { testProxyUrl } from "@/lib/network/proxyTest";
 import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { probeBedrockCredentials } from "open-sse/executors/bedrock.js";
+import { CodeArtsExecutor } from "open-sse/executors/codearts-cn.js";
 import { resolveOllamaLocalHost, PROVIDERS } from "open-sse/config/providers.js";
 import { CODEX_CLI_VERSION } from "open-sse/config/appConstants.js";
 import { GROK_CLI_PAGER_USER_AGENT, GROK_CLI_VERSION } from "open-sse/config/grokCli.js";
@@ -568,6 +569,18 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
     try {
       return await probeBedrockCredentials(
         connection,
+        (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
+      );
+    } catch (err) {
+      return { valid: false, error: err.message };
+    }
+  }
+
+  // 华为云码道：同样是 IAM 签名，不走通用 bearer 探测。
+  if (AI_PROVIDERS[connection.provider]?.credentialForm === "codearts") {
+    try {
+      return await new CodeArtsExecutor().probeCredentials(
+        { providerSpecificData: connection.providerSpecificData },
         (url, options) => fetchWithConnectionProxy(url, options, effectiveProxy),
       );
     } catch (err) {

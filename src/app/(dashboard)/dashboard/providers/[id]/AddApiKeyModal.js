@@ -24,6 +24,9 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
   // way to enter a profile at all, which is the same mistake as hardcoding the API-key exemption.
   const usesAwsCredentialForm =
     AI_PROVIDERS?.[provider]?.credentialForm === "aws";
+  // 华为云码道：凭据是 AK/SK 对，没有 Bearer key
+  const usesCodeartsCredentialForm =
+    AI_PROVIDERS?.[provider]?.credentialForm === "codearts";
   // Registry-declared: names the providerSpecificData field that stands in for an API key, so
   // a provider whose credential lives outside the key field can be saved without one.
   const apiKeyOptionalWith = AI_PROVIDERS?.[provider]?.apiKeyOptionalWith || null;
@@ -50,6 +53,10 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     region: "",
     accessKeyId: "",
     sessionToken: "",
+  });
+  const [codeartsData, setCodeartsData] = useState({
+    accessKeyId: "",
+    secretAccessKey: "",
   });
   const [region, setRegion] = useState(defaultRegion);
   const [validating, setValidating] = useState(false);
@@ -80,6 +87,12 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     if (isCloudflareAi) {
       return { accountId: cloudflareData.accountId };
     }
+    if (usesCodeartsCredentialForm) {
+      return {
+        accessKeyId: codeartsData.accessKeyId.trim(),
+        secretAccessKey: codeartsData.secretAccessKey.trim(),
+      };
+    }
     if (usesAwsCredentialForm) {
       // Only send what the user filled in: an empty `profile` would otherwise select profile
       // mode and shadow static keys, since detectCredentialMode prefers a profile.
@@ -104,6 +117,8 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
     if (apiKeyOptionalWith && psd?.[apiKeyOptionalWith]) return true;
     // AWS static keys are a pair: a secret alone saves a connection that can never sign.
     if (usesAwsCredentialForm) return !!formData.apiKey && !!psd?.accessKeyId;
+    // 码道的凭据就是 AK/SK 对，缺一不可。
+    if (usesCodeartsCredentialForm) return !!psd?.accessKeyId && !!psd?.secretAccessKey;
     return !!formData.apiKey;
   };
 
@@ -226,7 +241,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
       <div className="flex flex-col gap-4">
         {/* Mode switcher. Hidden for AWS credentials: bulk lines carry only a key, so a
             Bedrock entry would be saved with no access key id or profile and never work. */}
-        {!usesAwsCredentialForm && (
+        {!usesAwsCredentialForm && !usesCodeartsCredentialForm && (
           <div className="flex gap-2">
             <Button size="sm" variant={mode === "single" ? "primary" : "ghost"} onClick={() => { setMode("single"); setBulkResult(null); }}>Single</Button>
             <Button size="sm" variant={mode === "bulk" ? "primary" : "ghost"} onClick={() => { setMode("bulk"); setBulkResult(null); }}>Bulk Add</Button>
@@ -286,7 +301,7 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
             </div>
           </div>
         )}
-        {!isOllamaLocal && (
+        {!isOllamaLocal && !usesCodeartsCredentialForm && (
           <div className="flex gap-2">
             <Input
               label={credentialLabel}
@@ -297,6 +312,31 @@ export default function AddApiKeyModal({ isOpen, provider, providerName, isCompa
               className="flex-1"
             />
             <div className="pt-6">
+              <Button onClick={handleValidate} disabled={!apiKeySatisfied() || validating || saving} variant="secondary">
+                {validating ? "Checking..." : "Check"}
+              </Button>
+            </div>
+          </div>
+        )}
+        {usesCodeartsCredentialForm && (
+          <div className="bg-sidebar/50 p-4 rounded-lg border border-accent/20 flex flex-col gap-3">
+            <h3 className="font-semibold text-sm">华为云 IAM 凭据</h3>
+            <Input
+              label="Access Key ID"
+              value={codeartsData.accessKeyId}
+              onChange={(e) => setCodeartsData({ ...codeartsData, accessKeyId: e.target.value })}
+              placeholder="HPUA••••••••••••••••"
+              hint="在 https://codearts.huaweicloud.com/portal/settings/cli-auth 申请"
+            />
+            <Input
+              label="Secret Access Key"
+              type="password"
+              value={codeartsData.secretAccessKey}
+              onChange={(e) => setCodeartsData({ ...codeartsData, secretAccessKey: e.target.value })}
+              placeholder="Enter your secret key"
+              hint="将加密存储。请求时用 IAM SDK-HMAC-SHA256 签名。"
+            />
+            <div className="flex justify-end">
               <Button onClick={handleValidate} disabled={!apiKeySatisfied() || validating || saving} variant="secondary">
                 {validating ? "Checking..." : "Check"}
               </Button>

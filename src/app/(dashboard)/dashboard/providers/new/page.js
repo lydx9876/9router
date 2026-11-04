@@ -26,6 +26,7 @@ export default function NewProviderPage() {
     displayName: "",
     isActive: true,
   });
+  const [codeartsData, setCodeartsData] = useState({ accessKeyId: "", secretAccessKey: "" });
   const [errors, setErrors] = useState({});
 
   const handleChange = (field, value) => {
@@ -38,7 +39,10 @@ export default function NewProviderPage() {
   const validate = () => {
     const newErrors = {};
     if (!formData.provider) newErrors.provider = "Please select a provider";
-    if (formData.authMethod === "api_key" && !formData.apiKey) {
+    if (formData.authMethod === "api_key" && usesCodeartsCredentialForm) {
+      if (!codeartsData.accessKeyId.trim()) newErrors.codeartsAk = "Access Key ID is required";
+      if (!codeartsData.secretAccessKey.trim()) newErrors.codeartsSk = "Secret Access Key is required";
+    } else if (formData.authMethod === "api_key" && !formData.apiKey) {
       newErrors.apiKey = "API Key is required";
     }
     setErrors(newErrors);
@@ -54,7 +58,17 @@ export default function NewProviderPage() {
       const response = await fetch("/api/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          ...(usesCodeartsCredentialForm
+            ? {
+                providerSpecificData: {
+                  accessKeyId: codeartsData.accessKeyId.trim(),
+                  secretAccessKey: codeartsData.secretAccessKey.trim(),
+                },
+              }
+            : {}),
+        }),
       });
 
       if (response.ok) {
@@ -71,6 +85,7 @@ export default function NewProviderPage() {
   };
 
   const selectedProvider = AI_PROVIDERS[formData.provider];
+  const usesCodeartsCredentialForm = selectedProvider?.credentialForm === "codearts";
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -152,7 +167,7 @@ export default function NewProviderPage() {
           </div>
 
           {/* API Key Input */}
-          {formData.authMethod === "api_key" && (
+          {formData.authMethod === "api_key" && !usesCodeartsCredentialForm && (
             <Input
               label="API Key"
               type="password"
@@ -163,6 +178,31 @@ export default function NewProviderPage() {
               hint="Your API key will be encrypted and stored securely."
               required
             />
+          )}
+
+          {/* 华为云 IAM 凭据（码道用 AK/SK 签名，不用 Bearer API Key） */}
+          {formData.authMethod === "api_key" && usesCodeartsCredentialForm && (
+            <div className="flex flex-col gap-3">
+              <Input
+                label="Access Key ID"
+                placeholder="HPUA••••••••••••••••"
+                value={codeartsData.accessKeyId}
+                onChange={(e) => setCodeartsData({ ...codeartsData, accessKeyId: e.target.value })}
+                error={errors.codeartsAk}
+                hint="在 https://codearts.huaweicloud.com/portal/settings/cli-auth 申请"
+                required
+              />
+              <Input
+                label="Secret Access Key"
+                type="password"
+                placeholder="Enter your secret key"
+                value={codeartsData.secretAccessKey}
+                onChange={(e) => setCodeartsData({ ...codeartsData, secretAccessKey: e.target.value })}
+                error={errors.codeartsSk}
+                hint="将加密存储。请求时用 IAM SDK-HMAC-SHA256 签名。"
+                required
+              />
+            </div>
           )}
 
           {/* OAuth2 Button */}

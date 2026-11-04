@@ -80,6 +80,35 @@ export class BaseExecutor {
     return body;
   }
 
+  /**
+   * Hook: adjust the outgoing request right before it is sent.
+   *
+   * Most providers need nothing here. Providers whose upstream expects an
+   * encrypted or otherwise transformed body override this — e.g. 华为云码道
+   * (codearts-cn) encrypts the body with SM4-GCM and re-signs the request.
+   *
+   * @param {{headers: object, bodyStr: string, url: string, model: string,
+   *          credentials: object, stream: boolean}} request
+   * @returns {Promise<{headers: object, body: string}>}
+   */
+  async prepareOutgoingRequest({ headers, bodyStr, url, model, credentials, stream }) {
+    return { headers, body: bodyStr };
+  }
+
+  /**
+   * Hook: transform the upstream response before the caller reads it.
+   *
+   * Providers that encrypt their responses override this to decrypt the body
+   * (codearts-cn does).
+   *
+   * @param {Response} response
+   * @param {{url: string, credentials: object}} context
+   * @returns {Promise<Response>}
+   */
+  async transformUpstreamResponse(response, { url, credentials }) {
+    return response;
+  }
+
   shouldRetry(status, urlIndex) {
     return status === HTTP_STATUS.RATE_LIMITED && urlIndex + 1 < this.getFallbackCount();
   }
@@ -141,12 +170,22 @@ export class BaseExecutor {
 
       try {
         const bodyStr = JSON.stringify(transformedBody);
+        const outgoing = await this.prepareOutgoingRequest({
+          headers,
+          bodyStr,
+          url,
+          model,
+          credentials,
+          stream,
+        });
+        const finalHeaders = outgoing.headers;
+        const finalBody = outgoing.body;
         const fetchT0 = Date.now();
-        dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${bodyStr.length}B | connectTimeout=${timeoutMs}ms`);
+        dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${finalBody.length}B | connectTimeout=${timeoutMs}ms`);
         const response = await proxyAwareFetch(url, {
           method: "POST",
-          headers,
-          body: bodyStr,
+          headers: finalHeaders,
+          body: finalBody,
           signal: mergedSignal,
           // Protocol adapters that need their own transport (opencode's TLS
           // fingerprint) override the direct path; proxies still take priority.
@@ -165,7 +204,8 @@ export class BaseExecutor {
           continue;
         }
 
-        return { response, url, headers, transformedBody };
+        const finalResponse = await this.transformUpstreamResponse(response, { url, credentials });
+        return { response: finalResponse, url, headers: finalHeaders, transformedBody };
       } catch (error) {
         clearTimeout(connectTimer);
         lastError = error;

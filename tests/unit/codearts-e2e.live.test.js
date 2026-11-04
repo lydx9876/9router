@@ -45,17 +45,17 @@ describe("codearts-cn end-to-end", () => {
     );
     expect(body.stream).toBe(true);
 
-    const headers = ex.buildHeaders(credentials, true, url, model, body);
-    expect(headers.Authorization).toMatch(/^SDK-HMAC-SHA256 Access=/);
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
+    // 走完整的加密链路：key-exchange → SM4-GCM → 重新签名 → 上游 → 解密 SSE
+    const result = await ex.execute({
+      model,
+      body,
+      stream: true,
+      credentials,
+      log: { debug: () => {}, error: () => {} },
     });
-    expect(res.status).toBe(200);
+    expect(result.response.status).toBe(200);
 
-    const text = await res.text();
+    const text = await result.response.text();
     let content = "";
     let usage = null;
     for (const line of text.split("\n")) {

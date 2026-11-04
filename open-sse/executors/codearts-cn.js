@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { DefaultExecutor } from "./default.js";
 import { signCodeArtsRequest } from "../utils/codeartsSignature.js";
 import { acquireCodeArtsSlot } from "../utils/codeartsConcurrency.js";
+import { CodeArtsKeyExchange } from "../utils/codeartsKeyExchange.js";
+import { encryptRequestBody, decryptSseChunk, isEncryptedResponse } from "../utils/codeartsEncryption.js";
 
 /**
  * CLI 的 trace/session id 用的是不带连字符的 uuid。
@@ -17,11 +19,10 @@ function uuidNoDashes() {
 /**
  * 是否启用真实的 chat 请求。
  *
- * 默认关闭：上游现在要求请求 body 经 SM4-GCM 加密（见本文件头的说明），
- * 而本实现还没补上那一步。开着会得到一个误导性的 401
- * 「verify ak sk signature fail」（签名本身是对的）。
+ * 默认关闭：上游要求请求 body 经 SM4-GCM 加密，而加密链路还需要
+ * 一把协商出来的会话密钥（ECDH 握手）。
  *
- * 等 SM4-GCM 补齐后，把这个开关反过来（或直接删掉判断）即可启用。
+ * 设 CODEARTS_ENABLE_ENCRYPTED_BODY=1 打开。
  * 配额接口（snap-manager 插件统计）不受影响，一直可用。
  */
 function encryptedBodyEnabled() {
@@ -33,7 +34,7 @@ function encryptedBodyEnabled() {
  *
  * 端点：https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions
  *
- * ## ⚠️ 当前状态：AK/SK 直连不可用（缺少 SM4-GCM body 加密）
+ * ## 鉴权与加密
  *
  * 码道对客户端是 OpenAI 兼容的（官方 CLI 用 @ai-sdk/openai-compatible），
  * 鉴权不是 Bearer，而是华为云 IAM 的 SDK-HMAC-SHA256 签名：
@@ -43,33 +44,31 @@ function encryptedBodyEnabled() {
  * 签名每个请求都要重算（X-Sdk-Date 参与签名），所以放在 buildHeaders 里做，
  * 不能靠 registry 的静态 headers。
  *
- * 但完整的真实链路（从官方 CLI 日志 ~/.codeartsdoer/cli-data/log/ 提取）是：
+ * 完整的真实链路（从官方 CLI 二进制提取）是：
  *
  *   1. AK/SK 签名 → POST /api/v1/security/key-exchange
- *      → 拿到会话密钥 keyId（expiresIn=7200）
- *   2. 请求 body 用 SM4-GCM 加密（密文比明文长 28 字节：12 IV + 16 tag）
- *   3. 用 AK/SK 签名**加密后**的请求，content-type: application/octet-stream
+ *      → ECDH(prime256v1) 协商出会话密钥
+ *      → sessionKey = SHA-256(共享密钥)[0..16]，keyId 的 TTL 是 7200 秒
+ *   2. 请求 body 用 SM4-GCM 加密
+ *      AAD = `${method}|${pathname}|${timestamp}`
+ *      密文比明文长 28 字节（12 IV + 16 tag），body 发送 base64(密文)
+ *   3. 加上 X-Encrypt-Algo / -Key-Id / -Iv / -Tag / -Ts 五个头
+ *   4. 用 AK/SK 签名**加密后**的请求，content-type: application/octet-stream
+ *   5. 响应也是加密的：响应头带 X-Encrypt-Algo / -Key-Id / -Iv / -Tag，
+ *      需要用同一把密钥解密
  *
- * 本实现完成了 1、3，**缺第 2 步**（SM4-GCM）。因此上游会对明文 body 的请求
- * 回答：
+ * 实现见：
+ *   - 签名：open-sse/utils/codeartsSignature.js（与官方 CLI 逐字节一致）
+ *   - 密钥协商：open-sse/utils/codeartsKeyExchange.js
+ *   - SM4-GCM：open-sse/utils/sm4.js + open-sse/utils/sm4-gcm.js
+ *     （Node / OpenSSL 都没有 sm4-gcm，GCM 模式是手写的；
+ *      SM4 分组已用 GB/T 32907-2016 标准向量和 OpenSSL sm4-ecb 交叉验证）
  *
- *   401 {"error_code":"APIG.0301","error_msg":"Incorrect IAM authentication information: verify ak sk signature fail"}
+ * ## 并发限制
  *
- * ⚠️ 这个报错信息有误导性 —— 签名本身是对的（canonicalRequestHash 与官方 CLI
- * 逐字节一致，见 tests/unit/codearts-signature.test.js 的基准值），失败在服务端
- * 解密 body 上。
- *
- * 要补齐需要：ECDH(prime256v1) 密钥协商 + SM4-GCM（Node 只有 SM3，SM4 得靠
- * 第三方库，且 GCM 模式多半要手写）。故暂时保留本 provider 的签名 / 请求头 /
- * 并发闸门，待加密补齐后再启用。
- *
- * ## 已完成且可独立复用的部分
- *
- * - 签名：open-sse/utils/codeartsSignature.js（与官方 CLI 逐字节一致）
- * - 并发闸门：open-sse/utils/codeartsConcurrency.js
- *   （码道每账号只允许 3 个并发会话，超出返回 400 TM.00001041）
- * - 配额跟踪：open-sse/services/usage/codearts-cn.js
- *   （snap-manager 插件统计接口，用 AK/SK 就能调，**目前是实际可用的**）
+ * 码道每账号只允许 3 个并发会话，超出返回 400 TM.00001041。
+ * open-sse/utils/codeartsConcurrency.js 做本地闸门，
+ * executor 的 computeRetryDelay 做退避重试。
  *
  * AK/SK 存在 connection 的 providerSpecificData 里：
  *   { accessKeyId, secretAccessKey, securityToken? }
@@ -83,6 +82,8 @@ function encryptedBodyEnabled() {
 export class CodeArtsExecutor extends DefaultExecutor {
   constructor() {
     super("codearts-cn");
+    /** @type {Map<string, CodeArtsKeyExchange>} 按 baseUrl 缓存的密钥协商器 */
+    this.keyExchanges = new Map();
   }
 
   /** 从 connection 的 providerSpecificData 里取 AK/SK。 */
@@ -94,13 +95,39 @@ export class CodeArtsExecutor extends DefaultExecutor {
     return { accessKeyId, secretAccessKey, securityToken };
   }
 
-  buildHeaders(credentials, stream = true, url = null, model = null, body = null) {
-    const headers = super.buildHeaders(credentials, stream, url, model, body);
+  /**
+   * 拿到（或创建）该 baseUrl 的密钥协商器。
+   *
+   * 复用同一个实例，连续请求就不会每次都重新握手 ——
+   * 密钥的 TTL 是 7200 秒，提前 5 分钟自动续期。
+   *
+   * @param {string} baseUrl
+   * @param {object} credentials
+   * @returns {CodeArtsKeyExchange}
+   */
+  getKeyExchange(baseUrl, credentials) {
+    const existing = this.keyExchanges.get(baseUrl);
+    if (existing) return existing;
 
-    // 去掉默认的 Bearer —— 码道网关不认，只认 IAM 签名
-    delete headers["Authorization"];
-    delete headers["x-api-key"];
+    const { accessKeyId, secretAccessKey, securityToken } = this.getCredentials(credentials);
+    const exchange = new CodeArtsKeyExchange({
+      baseUrl,
+      signHeaders: async (method, url, contentType) =>
+        signCodeArtsRequest({
+          method,
+          url,
+          accessKeyId,
+          secretAccessKey,
+          securityToken,
+          contentType,
+        }),
+    });
+    this.keyExchanges.set(baseUrl, exchange);
+    return exchange;
+  }
 
+  /** 签名的辅助（buildHeaders 与密钥协商共用） */
+  signFor(credentials, method, url, contentType) {
     const { accessKeyId, secretAccessKey, securityToken } = this.getCredentials(credentials);
     if (!accessKeyId || !secretAccessKey) {
       throw new Error(
@@ -108,15 +135,24 @@ export class CodeArtsExecutor extends DefaultExecutor {
           "(华为云 AK/SK，参考 https://codearts.huaweicloud.com/portal/settings/cli-auth)",
       );
     }
-
-    const signed = signCodeArtsRequest({
-      method: "POST",
+    return signCodeArtsRequest({
+      method,
       url,
       accessKeyId,
       secretAccessKey,
       securityToken,
-      contentType: "application/json",
+      contentType,
     });
+  }
+
+  buildHeaders(credentials, stream = true, url = null, model = null, body = null) {
+    const headers = super.buildHeaders(credentials, stream, url, model, body);
+
+    // 去掉默认的 Bearer —— 码道网关不认，只认 IAM 签名
+    delete headers["Authorization"];
+    delete headers["x-api-key"];
+
+    const signed = this.signFor(credentials, "POST", url, "application/json");
 
     // 签名的头覆盖 registry 里的静态头（含 Host —— fetch 会自己设，但带上更贴近官方 CLI）
     Object.assign(headers, signed);
@@ -186,6 +222,135 @@ export class CodeArtsExecutor extends DefaultExecutor {
    *
    * 闸门按 AK 分组：同一账号的多个连接共享 3 个槽位。
    */
+  /**
+   * 加密请求体并重新签名。
+   *
+   * 官方 CLI 的 encrypting-fetch 就是这么做的：
+   *   1. 协商会话密钥（ECDH）
+   *   2. SM4-GCM 加密 body，AAD = `${method}|${pathname}|${timestamp}`
+   *   3. 加上 X-Encrypt-* 头
+   *   4. 用 AK/SK 重新签名（Content-Type 变成 application/octet-stream）
+   *   5. body 发 base64(密文)
+   */
+  async prepareOutgoingRequest({ headers, bodyStr, url, model, credentials, stream }) {
+    if (!encryptedBodyEnabled()) {
+      throw new Error(
+        "codearts-cn: chat requests are disabled because CodeArts requires the request body " +
+          "to be encrypted with SM4-GCM after a key-exchange step. Set " +
+          "CODEARTS_ENABLE_ENCRYPTED_BODY=1 to enable it.",
+      );
+    }
+
+    const baseUrl = this.getBaseUrls()[0] || this.config.baseUrl;
+    const exchange = this.getKeyExchange(baseUrl, credentials);
+    const { key, keyId } = await exchange.getOrNegotiateKey();
+
+    const parsed = new URL(url);
+    const timestamp = Date.now();
+    const method = "POST";
+
+    const encrypted = encryptRequestBody(key, bodyStr, method, parsed.pathname, timestamp);
+
+    // 重新签名 —— 签名的是加密后的请求，Content-Type 是 octet-stream
+    const signed = this.signFor(credentials, method, url, "application/octet-stream");
+
+    const finalHeaders = { ...headers };
+    // 签名头覆盖旧值（旧的 Authorization 是按 application/json 签的，必须换掉）
+    Object.assign(finalHeaders, signed);
+    Object.assign(finalHeaders, encrypted.headers);
+    // 密钥 id 告诉服务端用哪把密钥解密
+    finalHeaders["X-Encrypt-Key-Id"] = keyId;
+
+    return { headers: finalHeaders, body: encrypted.body };
+  }
+
+  /**
+   * 解密上游的 SSE 响应。
+   *
+   * 码道把 SSE 流**逐块**加密：每块的格式是
+   *
+   *   base64(ciphertext):base64(iv):base64(tag)
+   *
+   * 块与块之间用空行分隔，每块有自己的 IV 和 tag，
+   * AAD 是 `${keyId}|${chunkIndex}`（chunkIndex 从 0 开始）。
+   *
+   * 解密后把 X-Encrypt-* 头删掉、Content-Type 改回 text/event-stream。
+   */
+  async transformUpstreamResponse(response, { url, credentials }) {
+    if (!encryptedBodyEnabled() || !isEncryptedResponse(response.headers)) {
+      return response;
+    }
+
+    const baseUrl = this.getBaseUrls()[0] || this.config.baseUrl;
+    const exchange = this.getKeyExchange(baseUrl, credentials);
+    const { key, keyId } = await exchange.getOrNegotiateKey();
+
+    const headers = new Headers(response.headers);
+    headers.delete("X-Encrypt-Algo");
+    headers.delete("X-Encrypt-Key-Id");
+    headers.delete("X-Encrypt-Iv");
+    headers.delete("X-Encrypt-Tag");
+    headers.delete("X-Encrypt-Ts");
+    headers.set("Content-Type", "text/event-stream");
+
+    const body = response.body;
+    if (!body) {
+      return new Response(null, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+
+    // 逐块解密：累积到空行为止，然后解一块、吐一块
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let buffer = "";
+    let chunkIndex = 0;
+
+    const stream = new ReadableStream({
+      async pull(controller) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // 末尾可能还有没跟空行的一���
+            const rest = buffer.trim();
+            if (rest) {
+              const plain = decryptSseChunk(key, rest, keyId, chunkIndex++);
+              controller.enqueue(encoder.encode(`${plain}\n\n`));
+            }
+            controller.close();
+            return;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+
+          let emitted = false;
+          for (const part of parts) {
+            const text = part.trim();
+            if (!text) continue;
+            const plain = decryptSseChunk(key, text, keyId, chunkIndex++);
+            controller.enqueue(encoder.encode(`${plain}\n\n`));
+            emitted = true;
+          }
+          if (emitted) return;
+        }
+      },
+      cancel(reason) {
+        reader.cancel(reason);
+      },
+    });
+
+    return new Response(stream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+
   async execute(params) {
     const { model, body, stream, credentials, signal } = params;
     const { accessKeyId } = this.getCredentials(credentials);
@@ -195,17 +360,14 @@ export class CodeArtsExecutor extends DefaultExecutor {
       return super.execute(params);
     }
 
-    // 上游现在要求 body 经 SM4-GCM 加密，尚未实现。在排队之前就报清楚，
-    // 免得用户等完队拿到一个误导性的 “verify ak sk signature fail”。
+    // 上游要求 body 经 SM4-GCM 加密。加密链路在 prepareOutgoingRequest 里完成，
+    // 这里只负责排队（拿不到凭据时不排队，让签名阶段报带说明的错误）。
     if (!encryptedBodyEnabled()) {
       throw new Error(
-        "codearts-cn: chat requests are disabled because CodeArts now requires the request " +
-          "body to be encrypted with SM4-GCM (after a key-exchange step). The IAM signing " +
-          "is implemented and verified byte-for-byte against the official CLI, but the " +
-          "encryption layer is not — upstream answers 401 \"verify ak sk signature fail\" " +
-          "for plaintext bodies. Quota tracking (snap-manager plugin statistics) is " +
-          "unaffected and works. Set CODEARTS_ENABLE_ENCRYPTED_BODY=1 once the " +
-          "encryption layer lands.",
+        "codearts-cn: chat requests are disabled because CodeArts requires the request " +
+          "body to be encrypted with SM4-GCM (after a key-exchange step). Set " +
+          "CODEARTS_ENABLE_ENCRYPTED_BODY=1 to enable it. Quota tracking " +
+          "(snap-manager plugin statistics) is unaffected and works without it.",
       );
     }
 

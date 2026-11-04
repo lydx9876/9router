@@ -47,6 +47,55 @@ describe("codearts-cn provider wiring", () => {
     expect(PROVIDERS["codearts-cn"].forceStream).toBe(true);
   });
 
+  it("keeps the fixed CLI headers in the registry so Custom Headers can list them", () => {
+    // The Custom Headers panel reads PROVIDERS[id].headers — headers living only in
+    // the executor's buildHeaders() are invisible there, so users cannot see or
+    // change them. Fixed-value headers therefore belong in the registry.
+    const headers = PROVIDERS["codearts-cn"].headers || {};
+    for (const name of [
+      "app-id",
+      "is-need-queue",
+      "x-ot-client-type",
+      "x-ot-client-version",
+      "x-ot-function",
+      "x-codearts-doer-scenario-type",
+      "X-Language",
+    ]) {
+      expect(headers[name]).toBeTruthy();
+    }
+    expect(headers["app-id"]).toBe("CodeAgent3.0");
+    expect(headers["x-ot-client-type"]).toBe("CLI");
+    expect(headers["x-ot-function"]).toBe("agent-tui");
+  });
+
+  it("generates the per-request headers in the executor, not the registry", () => {
+    // These change every call — they cannot be registry defaults, or every
+    // request would carry the same trace id.
+    const headers = PROVIDERS["codearts-cn"].headers || {};
+    for (const name of ["x-ot-trace-id", "x-ot-span-id", "x-snap-traceid", "x-ot-session-id", "created-time"]) {
+      expect(headers[name]).toBeUndefined();
+    }
+
+    const ex = getExecutor("codearts-cn");
+    const built = ex.buildHeaders(
+      {
+        provider: "codearts-cn",
+        providerSpecificData: {
+          accessKeyId: "AKIDEXAMPLE",
+          secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+        },
+      },
+      true,
+      PROVIDERS["codearts-cn"].baseUrl,
+      "deepseek-v4.1-flash-1017",
+      {},
+    );
+    for (const name of ["x-ot-trace-id", "x-ot-span-id", "x-snap-traceid", "x-ot-session-id", "created-time"]) {
+      expect(built[name]).toBeTruthy();
+    }
+    expect(built["model-id"]).toBe("deepseek-v4.1-flash-1017");
+  });
+
   it("uses the dedicated executor at runtime (not the Bearer default)", () => {
     const executor = getExecutor("codearts-cn");
     expect(executor.constructor.name).toBe("CodeArtsExecutor");

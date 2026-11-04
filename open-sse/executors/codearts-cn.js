@@ -5,13 +5,11 @@ import { signCodeArtsRequest } from "../utils/codeartsSignature.js";
 import { acquireCodeArtsSlot } from "../utils/codeartsConcurrency.js";
 
 /**
- * 官方 CodeArts Doer CLI 的版本号。CLI 在二进制里把它作为
- * x-ot-client-version 发送（var nP="26.10.13"）。这是 2026-11 测得的版本；
- * 升 CLI 时这个值需要同步——它只用于调用方标识，网关不校验。
+ * CLI 的 trace/session id 用的是不带连字符的 uuid。
+ *
+ * 固定不变的头（app-id / x-ot-client-* 等）在 registry 的 transport.headers 里，
+ * 这样 Custom Headers 面板能列出来、用户能改。
  */
-const CODEARTS_CLIENT_VERSION = "26.10.13";
-
-/** CLI 的 trace/session id 用的是不带连字符的 uuid。 */
 function uuidNoDashes() {
   return randomUUID().replace(/-/g, "");
 }
@@ -123,31 +121,21 @@ export class CodeArtsExecutor extends DefaultExecutor {
     // 签名的头覆盖 registry 里的静态头（含 Host —— fetch 会自己设，但带上更贴近官方 CLI）
     Object.assign(headers, signed);
 
-    // 官方 CLI 固定带的客户端标识与调用方信息（缺了网关仍放行，但会丢掉
-    // trace/session 关联）。值的形状取自 CLI 的 getInferhubHcHeaders：
-    //   x-ot-client-type    = "CLI"
-    //   x-ot-client-version = CLI 版本号
-    //   x-ot-function       = "agent-tui"（CLI 的功能标识）
-    //   x-ot-*id            = uuid 去横线
-    //   app-id / is-need-queue 决定请求是否进网关排队
-    headers["app-id"] = "CodeAgent3.0";
-    headers["is-need-queue"] = "true";
-    headers["x-ot-client-type"] = "CLI";
-    headers["x-ot-client-version"] = CODEARTS_CLIENT_VERSION;
-    headers["x-ot-function"] = "agent-tui";
-    headers["x-codearts-doer-scenario-type"] = "web";
-    headers["X-Language"] = "zh-cn";
+    // 每请求变化的头（registry 里放不了 —— 每次调用都得是新的）。
+    // 值的形状取自官方 CLI 的 getInferhubHcHeaders：
+    //   x-ot-*id = uuid 去连字符
+    //   x-ot-session-id / user-session-id：CLI 用的是 "ses_..." 形式的会话 id，
+    //     这里用同样的前缀，便于在上游日志里关联到同一次会话
     headers["x-ot-trace-id"] = uuidNoDashes();
     headers["x-ot-span-id"] = uuidNoDashes();
     headers["x-snap-traceid"] = uuidNoDashes();
-    headers["x-ot-session-id"] = uuidNoDashes();
-    headers["user-session-id"] = uuidNoDashes();
+    headers["x-ot-session-id"] = `ses_${uuidNoDashes()}`;
+    headers["user-session-id"] = headers["x-ot-session-id"];
     headers["x-ot-parent-session-id"] = "";
     headers["user-msg-id"] = "";
-    headers["created-time"] = "";
+    headers["created-time"] = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     headers["model-id"] = model || "";
     headers["model-name"] = model || "";
-    headers["Accept"] = "text/event-stream";
 
     return headers;
   }

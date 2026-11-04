@@ -29,8 +29,24 @@ export default {
     // 码道是 OpenAI 风格网关，thinking 走 reasoning_effort。
     // 标准 openai 格式的档位（none/low/medium/high/xhigh）已被上游实测接受。
     thinkingFormat: "openai",
+    // 固定不变的头 —— 放在 registry 里，这样 Custom Headers 面板能列出来、
+    // 用户能改（providerOverrides 在 buildHeaders 之后应用，优先级最高）。
+    //
+    // 每请求变化的头（x-ot-trace-id / x-ot-span-id / x-snap-traceid /
+    // x-ot-session-id / user-session-id / created-time）以及依赖模型的头
+    // （model-id / model-name）不能放这里 —— 它们由 executor 每次请求重新生成。
     headers: {
       "Content-Type": "application/json",
+      // 网关的调用方标识，缺了会丢掉 trace/session 关联
+      "app-id": "CodeAgent3.0",
+      // 是否进网关排队
+      "is-need-queue": "true",
+      "x-ot-client-type": "CLI",
+      "x-ot-client-version": "26.10.13",
+      "x-ot-function": "agent-tui",
+      "x-codearts-doer-scenario-type": "web",
+      "X-Language": "zh-cn",
+      "Accept": "text/event-stream",
     },
     timeoutMs: 180000,
     stallTimeoutMs: 180000,

@@ -44,6 +44,45 @@ const PENDING_COMPLETION_FLUSH_MS = 3000;
  * @param {function} options.onStreamComplete - Callback when stream completes (content, usage)
  * @param {string} options.apiKey - API key for usage tracking
  */
+// Accumulate streamed tool calls so a tool-only turn still has readable content
+// in the request detail. OpenAI streams them as indexed deltas; Claude streams a
+// content_block_start (id + name) followed by input_json_delta fragments.
+function accumulateOpenAIToolCalls(target, delta) {
+  const calls = delta?.tool_calls;
+  if (!Array.isArray(calls)) return;
+  for (const call of calls) {
+    const index = typeof call?.index === "number" ? call.index : 0;
+    const slot = (target[index] ||= { id: "", name: "", arguments: "" });
+    if (call.id) slot.id = call.id;
+    if (call.function?.name) slot.name = call.function.name;
+    if (typeof call.function?.arguments === "string") slot.arguments += call.function.arguments;
+  }
+}
+
+function accumulateClaudeToolUse(target, parsed) {
+  const block = parsed?.content_block;
+  if (block?.type === "tool_use") {
+    const slot = (target[parsed.index || 0] ||= { id: "", name: "", arguments: "" });
+    if (block.id) slot.id = block.id;
+    if (block.name) slot.name = block.name;
+    if (block.input && typeof block.input === "object" && Object.keys(block.input).length) {
+      slot.arguments = JSON.stringify(block.input);
+    }
+  }
+  const delta = parsed?.delta;
+  if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") {
+    const slot = (target[parsed.index || 0] ||= { id: "", name: "", arguments: "" });
+    slot.arguments += delta.partial_json;
+  }
+}
+
+function renderToolCalls(toolCalls) {
+  const lines = (toolCalls || [])
+    .filter(Boolean)
+    .map((call) => `${call.name || "tool"}(${call.arguments || ""})`);
+  return lines.filter(Boolean).join("\n");
+}
+
 export function createSSEStream(options = {}) {
   const {
     mode = STREAM_MODE.TRANSLATE,
@@ -86,6 +125,10 @@ export function createSSEStream(options = {}) {
   let totalContentLength = 0;
   let accumulatedContent = "";
   let accumulatedThinking = "";
+  // A tool-only turn (an agent calling a function) has no text at all, so the
+  // detail record used to say "[Empty streaming response]" for it. Track the
+  // calls too and render them as text when there is no prose.
+  let accumulatedToolCalls = [];
   let ttftAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
@@ -128,7 +171,7 @@ export function createSSEStream(options = {}) {
 
     if (onStreamComplete) {
       onStreamComplete({
-        content: accumulatedContent,
+        content: accumulatedContent || renderToolCalls(accumulatedToolCalls),
         thinking: accumulatedThinking
       }, finalUsage, ttftAt);
     }
@@ -267,6 +310,7 @@ export function createSSEStream(options = {}) {
                 totalContentLength += reasoning.length;
                 accumulatedThinking += reasoning;
               }
+              accumulateOpenAIToolCalls(accumulatedToolCalls, delta);
 
               const extracted = extractUsage(parsed);
               if (extracted) {
@@ -382,6 +426,10 @@ export function createSSEStream(options = {}) {
           totalContentLength += parsed.choices[0].delta.reasoning_content.length;
           accumulatedThinking += parsed.choices[0].delta.reasoning_content;
         }
+
+        // Tool calls in both framings — an agent turn carries its payload here.
+        accumulateOpenAIToolCalls(accumulatedToolCalls, parsed.choices?.[0]?.delta);
+        accumulateClaudeToolUse(accumulatedToolCalls, parsed);
         
         // Gemini format
         if (parsed.candidates?.[0]?.content?.parts) {

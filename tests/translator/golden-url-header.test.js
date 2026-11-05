@@ -21,21 +21,55 @@ const SPECIALIZED = new Set([
   "codex", "cursor", "vertex", "vertex-partner", "opencode",
   "opencode-go", "grok-web", "perplexity-web", "ollama-local", "commandcode",
   "xiaomi-tokenplan", "mimo-free",
+  // Provider có executor riêng (buildHeaders khác hẳn DefaultExecutor) — golden này
+  // dựng executor bằng `new DefaultExecutor(pid)`, nên với các provider này nó
+  // đo một hành vi không tồn tại. Chúng được lock riêng trong unit test chuyên biệt.
+  //   codearts-cn       → CodeArtsExecutor      (IAM SDK-HMAC-SHA256 签名)
+  //   codebuddy-cn/intl → CodeBuddyExecutor     (x-codebuddy-request 等)
+  //   minimax-code(-global) → MinimaxCodeExecutor (User-Agent / X-Mavis-Agent-Id)
+  "codearts-cn", "codebuddy-cn", "codebuddy-intl",
+  "minimax-code", "minimax-code-global",
 ]);
 
 // Per-process / per-request values: kimi's random device name, minimax's session UUID.
 const VOLATILE_HEADERS = new Set(["x-msh-device-name", "x-mavis-session-id"]);
 
+// Headers whose value depends on the build machine or the app version.
+//
+// A snapshot that pins these breaks on every release (version bump) and on
+// every machine (platform / Node version / device model) — the test then fails
+// for reasons that have nothing to do with the provider. Mask them instead, the
+// same way the existing volatile headers are handled.
+const ENV_HEADERS = new Set([
+  "x-client-version",
+  "x-core-version",
+  "x-msh-version",
+  "x-platform",              // linux / darwin / win32
+  "x-platform-version",      // v22.23.2 / v24.16.0
+  "x-msh-device-model",      // Linux x64 / macOS arm64
+]);
+
 // Sanitize header: khử token + field thời gian động (kimi X-Msh-Device-Id) để snapshot ổn định.
 function sanitize(headers) {
   const out = {};
   for (const [k, v] of Object.entries(headers)) {
-    if (VOLATILE_HEADERS.has(k.toLowerCase())) { out[k] = "<VOLATILE>"; continue; }
-    out[k] = typeof v === "string"
-      ? v.replace(/Bearer .+/, "Bearer <TOK>")
-          .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
-          .replace(/kimi-\d{10,}/g, "kimi-<TS>")
-      : v;
+    const lower = k.toLowerCase();
+    if (VOLATILE_HEADERS.has(lower)) { out[k] = "<VOLATILE>"; continue; }
+    if (ENV_HEADERS.has(lower)) { out[k] = "<ENV>"; continue; }
+    if (typeof v === "string") {
+      // User-Agent: chỉ mask khi nó chứa version của app — User-Agent cố định
+      // (vd "CLI/2.108.1 CodeBuddy/2.108.1") là contract, phải giữ nguyên.
+      if (lower === "user-agent" && /\b\d+\.\d+\.\d+\b/.test(v) && /9router/i.test(v)) {
+        out[k] = "<ENV>";
+        continue;
+      }
+      out[k] = v
+        .replace(/Bearer .+/, "Bearer <TOK>")
+        .replace(/sk-test-APIKEY|tok-test-ACCESS/g, "<CRED>")
+        .replace(/kimi-\d{10,}/g, "kimi-<TS>");
+      continue;
+    }
+    out[k] = v;
   }
   return out;
 }

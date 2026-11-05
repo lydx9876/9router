@@ -10,6 +10,10 @@ const defaultCaps = () => Object.fromEntries(Object.keys(CAPACITY_META).map((key
 export default function AddCustomModelModal({ isOpen, providerAlias, providerDisplayAlias, onSave, onClose }) {
   const [modelId, setModelId] = useState("");
   const [caps, setCaps] = useState(defaultCaps);
+  // Model type: llm / stt / embedding / rerank. A rerank model is not a chat
+  // model — testing it through /v1/chat/completions fails with a confusing
+  // error, so the type decides which endpoint the probe uses.
+  const [modelType, setModelType] = useState("llm");
   const [testStatus, setTestStatus] = useState(null); // null | "testing" | "ok" | "error"
   const [testError, setTestError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -18,7 +22,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
 
   // Reset state when modal opens
   useEffect(() => {
-    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTransport(""); setTestStatus(null); setTestError(""); }
+    if (isOpen) { setModelId(""); setCaps(defaultCaps()); setTransport(""); setModelType("llm"); setTestStatus(null); setTestError(""); }
   }, [isOpen]);
 
   // Strip provider's own alias prefix (e.g. "cc/model" -> "model" for cc provider)
@@ -36,7 +40,7 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: `${providerAlias}/${cleanId}` }),
+        body: JSON.stringify({ model: `${providerAlias}/${cleanId}`, kind: modelType }),
       });
       const data = await res.json();
       setTestStatus(data.ok ? "ok" : "error");
@@ -54,7 +58,8 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
     try {
       // caps.stt is UI-only; the parent save flow derives the model type from
       // it and forwards the pinned transport (null unless the caller picked one).
-      await onSave(cleanId, caps, caps.stt ? transport : null);
+      // The explicit type wins — a rerank model is neither llm nor stt.
+      await onSave(cleanId, caps, caps.stt ? transport : null, modelType);
     } finally {
       setSaving(false);
     }
@@ -92,6 +97,21 @@ export default function AddCustomModelModal({ isOpen, providerAlias, providerDis
           <p className="text-xs text-text-muted mt-1">
             Sent to provider as: <code className="font-mono bg-sidebar px-1 rounded">{stripAlias(modelId.trim()) || "model-id"}</code>
           </p>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-1.5 block">Model Type</label>
+          <Select
+            value={modelType}
+            onChange={(e) => { setModelType(e.target.value); setTestStatus(null); setTestError(""); }}
+            options={[
+              { value: "llm", label: "LLM (chat completions)" },
+              { value: "embedding", label: "Embedding (embeddings)" },
+              { value: "rerank", label: "Rerank (rerank)" },
+              { value: "stt", label: "Speech to Text (transcriptions)" },
+            ]}
+            hint="Decides which endpoint the model is tested against and where it appears in the UI."
+          />
         </div>
 
         <div>

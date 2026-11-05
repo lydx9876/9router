@@ -71,21 +71,21 @@ function CompatibleModelRow({ modelId, fullModel, copied, onCopy, onDeleteAlias,
   );
 }
 
-export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, customModels, copied, onCopy, onDeleteAlias, onAddCustomModel, onDeleteCustomModel, connections, isAnthropic }) {
+export default function CompatibleModelsSection({ providerStorageAlias, providerDisplayAlias, modelAliases, customModels, copied, onCopy, onDeleteAlias, onAddCustomModel, onDeleteCustomModel, connections, isAnthropic, nodeType }) {
   const [newModel, setNewModel] = useState("");
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
   const [testingModelId, setTestingModelId] = useState(null);
   const [modelTestResults, setModelTestResults] = useState({});
 
-  const handleTestModel = async (modelId) => {
+  const handleTestModel = async (modelId, kind = "llm") => {
     if (testingModelId) return;
     setTestingModelId(modelId);
     try {
       const res = await fetch("/api/models/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: `${providerStorageAlias}/${modelId}` }),
+        body: JSON.stringify({ model: `${providerStorageAlias}/${modelId}`, kind }),
       });
       const data = await res.json();
       setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
@@ -96,11 +96,17 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
     }
   };
 
+  // Every model type is listed here — a rerank or embedding model is not a
+  // chat model, but it still belongs to this node and should be visible and
+  // testable. The row's type decides which endpoint the probe uses.
   const allModels = getProviderCustomModelRows({
     customModels,
     modelAliases,
     providerAlias: providerStorageAlias,
-    type: "llm",
+    // null = no filter: a rerank or embedding model is not a chat model, but it
+    // still belongs to this node and should be visible and testable. The row's
+    // type decides which endpoint the probe uses.
+    type: null,
   });
 
   const handleAdd = async () => {
@@ -163,7 +169,9 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-text-muted">
-        Add {isAnthropic ? "Anthropic" : "OpenAI"}-compatible models manually or import them from the /models endpoint.
+        {nodeType === "custom-rerank"
+          ? "Add rerank models manually or import them from the /models endpoint."
+          : `Add ${isAnthropic ? "Anthropic" : "OpenAI"}-compatible models manually or import them from the /models endpoint.`}
       </p>
 
       <div className="flex items-end gap-2 flex-wrap">
@@ -175,7 +183,7 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
             value={newModel}
             onChange={(e) => setNewModel(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleAdd()}
-            placeholder={isAnthropic ? "claude-3-opus-20240229" : "gpt-4o"}
+            placeholder={nodeType === "custom-rerank" ? "Qwen3-Reranker-8B" : isAnthropic ? "claude-3-opus-20240229" : "gpt-4o"}
             className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary"
           />
         </div>
@@ -195,7 +203,7 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
 
       {allModels.length > 0 && (
         <div className="flex flex-col gap-3">
-          {allModels.map(({ id, alias, source }) => (
+          {allModels.map(({ id, alias, source, type }) => (
             <CompatibleModelRow
               key={`${source}-${providerStorageAlias}/${id}`}
               modelId={id}
@@ -203,7 +211,7 @@ export default function CompatibleModelsSection({ providerStorageAlias, provider
               copied={copied}
               onCopy={onCopy}
               onDeleteAlias={() => source === "custom" ? onDeleteCustomModel(id) : onDeleteAlias(alias)}
-              onTest={connections.length > 0 ? () => handleTestModel(id) : undefined}
+              onTest={connections.length > 0 ? () => handleTestModel(id, type) : undefined}
               testStatus={modelTestResults[id]}
               isTesting={testingModelId === id}
             />
@@ -229,4 +237,5 @@ CompatibleModelsSection.propTypes = {
     isActive: PropTypes.bool,
   })).isRequired,
   isAnthropic: PropTypes.bool,
+  nodeType: PropTypes.string,
 };

@@ -135,17 +135,31 @@ export async function POST(request) {
           return NextResponse.json({ error: "Custom Rerank node not found" }, { status: 404 });
         }
         const baseUrl = node.baseUrl?.replace(/\/$/, "").replace(/\/rerank$/, "");
+        // Use the model the user actually configured — a probe with a made-up
+        // model name gets a 400 "model not found" and reports the connection as
+        // invalid even though the key and host are fine.
+        const probeModel =
+          providerSpecificData?.defaultModel ||
+          body.defaultModel ||
+          body.model ||
+          getDefaultModel(provider) ||
+          "";
         const res = await fetch(`${baseUrl}/rerank`, {
           method: "POST",
           headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "test", query: "ping", documents: ["ping", "pong"] }),
+          body: JSON.stringify({
+            model: probeModel,
+            query: "ping",
+            documents: ["ping", "pong"],
+          }),
         });
         if (res.ok || res.status === 401 || res.status === 403) {
           return NextResponse.json({ valid: true });
         }
+        const errBody = await res.text().catch(() => "");
         return NextResponse.json({
           valid: false,
-          error: `Rerank endpoint unreachable (${res.status})`,
+          error: `Rerank endpoint unreachable (${res.status})${errBody ? `: ${errBody.slice(0, 200)}` : ""}`,
         });
       }
 

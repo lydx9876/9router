@@ -6,7 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { getProviderIconSrc, markProviderIconMissing } from "@/shared/utils/providerIcon";
 import { Card, Button, Badge, Input, Modal, CardSkeleton, OAuthModal, KiroOAuthWrapper, CursorAuthModal, ZedAuthModal, XiaomiMimoAuthModal, IFlowCookieModal, GitLabAuthModal, Toggle, Select, EditConnectionModal, NoAuthProxyCard, ConfirmModal } from "@/shared/components";
-import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { OAUTH_PROVIDERS, APIKEY_PROVIDERS, FREE_PROVIDERS, FREE_TIER_PROVIDERS, WEB_COOKIE_PROVIDERS, getProviderAlias, isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomRerankProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getThinkingLevels } from "open-sse/providers/thinkingLevels.js";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
@@ -40,6 +40,21 @@ const AUTO_PING_SETTINGS_KEYS = {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Human-readable label for a self-hosted node when it has no name.
+ *
+ * Without this the Add API Key modal title showed the raw node id
+ * ("Add custom-rerank-d38f1b21-… API Key") — technically correct but unreadable.
+ */
+function nodeDisplayName(node) {
+  switch (node?.type) {
+    case "anthropic-compatible": return "Anthropic Compatible";
+    case "custom-rerank": return "Custom Rerank";
+    case "custom-embedding": return "Custom Embedding";
+    default: return "OpenAI Compatible";
+  }
 }
 
 export default function ProviderDetailPage() {
@@ -150,9 +165,9 @@ export default function ProviderDetailPage() {
   const providerInfo = providerNode
     ? {
         id: providerNode.id,
-        name: providerNode.name || (providerNode.type === "anthropic-compatible" ? "Anthropic Compatible" : "OpenAI Compatible"),
-        color: providerNode.type === "anthropic-compatible" ? "#D97757" : "#10A37F",
-        textIcon: providerNode.type === "anthropic-compatible" ? "AC" : "OC",
+        name: providerNode.name || nodeDisplayName(providerNode),
+        color: providerNode.type === "anthropic-compatible" ? "#D97757" : providerNode.type === "custom-rerank" ? "#6366F1" : "#10A37F",
+        textIcon: providerNode.type === "anthropic-compatible" ? "AC" : providerNode.type === "custom-rerank" ? "CR" : "OC",
         apiType: providerNode.apiType,
         baseUrl: providerNode.baseUrl,
         type: providerNode.type,
@@ -170,7 +185,14 @@ export default function ProviderDetailPage() {
   
   const isOpenAICompatible = isOpenAICompatibleProvider(providerId);
   const isAnthropicCompatible = isAnthropicCompatibleProvider(providerId);
-  const isCompatible = isOpenAICompatible || isAnthropicCompatible;
+  // Custom rerank nodes are self-hosted too: the node carries the base URL and
+  // the models list lives in the custom-model table. Treat them like the
+  // compatible nodes for node loading and display.
+  const isCustomRerank = isCustomRerankProvider(providerId);
+  const isCompatible = isOpenAICompatible || isAnthropicCompatible || isCustomRerank;
+  // The model type a new model gets by default: a rerank node's models are
+  // rerank models, everything else defaults to llm.
+  const defaultModelType = isCustomRerank ? "rerank" : "llm";
   const hasDualAuthModes = !isCompatible && isOAuth && supportsApiKeyAuth;
   const oauthConnectionLabel =
     providerId === "xai" ? "Grok Build OAuth"
@@ -1174,10 +1196,11 @@ export default function ProviderDetailPage() {
           onCopy={copy}
           onSetAlias={handleSetAlias}
           onDeleteAlias={handleDeleteAlias}
-          onAddCustomModel={(modelId) => handleAddCustomModel(modelId, "llm", providerStorageAlias)}
-          onDeleteCustomModel={(modelId) => handleDeleteCustomModel(modelId, "llm", providerStorageAlias)}
+          onAddCustomModel={(modelId) => handleAddCustomModel(modelId, defaultModelType, providerStorageAlias)}
+          onDeleteCustomModel={(modelId) => handleDeleteCustomModel(modelId, defaultModelType, providerStorageAlias)}
           connections={connections}
           isAnthropic={isAnthropicCompatible}
+          nodeType={providerNode?.type}
         />
       );
     }
@@ -1943,10 +1966,12 @@ export default function ProviderDetailPage() {
           isOpen={showAddCustomModel}
           providerAlias={providerStorageAlias}
           providerDisplayAlias={providerDisplayAlias}
-          onSave={async (modelId, caps, transport) => {
+          onSave={async (modelId, caps, transport, explicitType) => {
             // caps.stt is a UI-only flag; the API accepts transports only on
-            // type "stt" records, so the save derives the type from it.
-            await handleAddCustomModel(modelId, caps?.stt ? "stt" : "llm", providerStorageAlias, caps, transport);
+            // type "stt" records. The modal's explicit type wins — a rerank or
+            // embedding model is neither llm nor stt.
+            const type = explicitType || (caps?.stt ? "stt" : "llm");
+            await handleAddCustomModel(modelId, type, providerStorageAlias, caps, transport);
             setShowAddCustomModel(false);
           }}
           onClose={() => setShowAddCustomModel(false)}

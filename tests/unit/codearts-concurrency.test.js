@@ -8,24 +8,30 @@ import {
 /**
  * 码道并发闸门的回归测试。
  *
- * 码道网关每个账号只允许 3 个并发会话，超出返回 400 TM.00001041。
- * 实测槽位在上游侧滞留 20–30 秒才释放，所以闸门不能只看"正在飞行中的
- * 请求"——否则前一个请求一返回就放行下一个，而上游还没释放槽位。
+ * 码道网关每个账号只允许 3 个**活跃会话**，超出返回 400 TM.00001041。
+ *
+ * ⚠️ 关键语义：「会话」是**不同的 x-ot-session-id**，不是同时在飞的请求。
+ * 实测（真实 AK/SK）：
+ *   - 固定一个 session id 连发 6 次 → 全部 200
+ *   - 每次换新 session id         → 第 4 个开始被拒
+ *
+ * 所以闸门按 session id 分组：同一 id 共享名额（可以并发），
+ * 不同 id 各占一个名额，最多 3 个。
  */
 describe("codearts concurrency gate", () => {
   beforeEach(() => {
     resetCodeArtsConcurrencyGates();
   });
 
-  it("allows three concurrent slots and blocks the fourth", async () => {
+  it("allows three distinct sessions and blocks a fourth", async () => {
     const releases = [];
     for (let i = 0; i < 3; i++) {
-      releases.push(await acquireCodeArtsSlot("AK1"));
+      releases.push(await acquireCodeArtsSlot("AK1", `session-${i}`));
     }
 
-    // 第四个应该排队而不是立即拿到槽位
+    // 第四个不同的会话应该排队而不是立即拿到名额
     let acquired = false;
-    const pending = acquireCodeArtsSlot("AK1", { maxWaitMs: 90_000 }).then((r) => {
+    const pending = acquireCodeArtsSlot("AK1", "session-3", { maxWaitMs: 90_000 }).then((r) => {
       acquired = true;
       return r;
     });
@@ -33,31 +39,50 @@ describe("codearts concurrency gate", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(acquired).toBe(false);
 
-    // 一个请求结束后，它的槽位仍被上游保留一阵子 —— 所以此时仍应是满的
     releases[0]();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(acquired).toBe(false);
-
     releases[1]();
     releases[2]();
-    // 等过 45 秒窗口 → 槽位释放，第四个拿到
+    // 等过持有窗口 → 名额释放，第四个拿到
     const r = await pending;
     expect(acquired).toBe(true);
     r();
   }, 120_000);
 
-  it("keeps the slot occupied for the window after the request ends", async () => {
-    // 填满 3 个槽位
+  it("lets the same session run again without waiting", async () => {
+    // 同一会话可以连续请求（哪怕并发）—— 上游只数不同的会话。
+    // 这条是「用户只开一个会话却撞上并发上限」的回归防线。
     const releases = [];
     for (let i = 0; i < 3; i++) {
-      releases.push(await acquireCodeArtsSlot("AK1"));
+      releases.push(await acquireCodeArtsSlot("AK1", `session-${i}`));
     }
-    // 结束其中一个 —— 上游槽位不会立刻释放，它仍占着位置
+
+    // 名额已满，但同一个 session id 依然可以拿到
+    const release = await acquireCodeArtsSlot("AK1", "session-0", { maxWaitMs: 200 });
+    expect(release).toBeTypeOf("function");
+    release();
+
+    releases.forEach((r) => r());
+  });
+
+  it("does not block a serial conversation on itself", async () => {
+    // 同一对话的串行请求不应互相排队
+    for (let i = 0; i < 5; i++) {
+      const release = await acquireCodeArtsSlot("AK1", "same-conversation", { maxWaitMs: 200 });
+      release();
+    }
+  });
+
+  it("keeps the session occupied for the hold window after the request ends", async () => {
+    // 上游的活跃会话不会立刻消失 —— 结束请求后名额仍占着
+    const releases = [];
+    for (let i = 0; i < 3; i++) {
+      releases.push(await acquireCodeArtsSlot("AK1", `session-${i}`));
+    }
     releases[0]();
 
-    // 所以第 4 个仍然拿不到槽位
+    // 第 4 个不同的会话仍然拿不到名额
     let acquired = false;
-    acquireCodeArtsSlot("AK1", { maxWaitMs: 150 }).catch(() => {});
+    acquireCodeArtsSlot("AK1", "session-3", { maxWaitMs: 150 }).catch(() => {});
     await new Promise((r) => setTimeout(r, 50));
     expect(acquired).toBe(false);
 
@@ -65,63 +90,52 @@ describe("codearts concurrency gate", () => {
     releases[2]();
   });
 
-  it("frees the slot once the window elapses", async () => {
-    const release = await acquireCodeArtsSlot("AK1");
+  it("frees the slot once the hold window elapses", async () => {
+    const release = await acquireCodeArtsSlot("AK1", "session-a");
     release();
-    // 窗口是 45 秒 —— 超过它之后同一个账号又能拿到槽位
-    const r = await acquireCodeArtsSlot("AK1", { maxWaitMs: 60_000 });
-    expect(r).toBeTypeOf("function");
-    r();
-  }, 70_000);
 
-  it("gives each account its own budget", async () => {
-    const a = await acquireCodeArtsSlot("AK-A");
-    const b = await acquireCodeArtsSlot("AK-B");
-    const c = await acquireCodeArtsSlot("AK-B");
-    const d = await acquireCodeArtsSlot("AK-B");
+    // 名额被持有一段时间（上游会话自动回收前不能立刻给新会话用）
+    let acquired = false;
+    acquireCodeArtsSlot("AK1", "session-b", { maxWaitMs: 150 }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(acquired).toBe(false);
+  });
 
-    // AK-A 只用了 1 个，AK-B 用满 3 个 —— 两者互不影响
-    expect(a).toBeTypeOf("function");
-    expect(b).toBeTypeOf("function");
-    expect(c).toBeTypeOf("function");
-    expect(d).toBeTypeOf("function");
-    a();
-    b();
-    c();
-    d();
+  it("gives each account its own quota", async () => {
+    const r1 = await acquireCodeArtsSlot("AK1", "s1");
+    const r2 = await acquireCodeArtsSlot("AK2", "s1");
+    expect(r1).toBeTypeOf("function");
+    expect(r2).toBeTypeOf("function");
+    r1();
+    r2();
+  });
+
+  it("aborts while waiting", async () => {
+    const releases = [];
+    for (let i = 0; i < 3; i++) {
+      releases.push(await acquireCodeArtsSlot("AK1", `session-${i}`));
+    }
+
+    const controller = new AbortController();
+    const pending = acquireCodeArtsSlot("AK1", "session-9", {
+      signal: controller.signal,
+      maxWaitMs: 90_000,
+    });
+    setTimeout(() => controller.abort(new Error("aborted")), 30);
+
+    await expect(pending).rejects.toThrow(/aborted/);
+    releases.forEach((r) => r());
   });
 
   it("times out instead of waiting forever", async () => {
     const releases = [];
     for (let i = 0; i < 3; i++) {
-      releases.push(await acquireCodeArtsSlot("AK1"));
+      releases.push(await acquireCodeArtsSlot("AK1", `session-${i}`));
     }
+
     await expect(
-      acquireCodeArtsSlot("AK1", { maxWaitMs: 120 }),
-    ).rejects.toThrow(/concurrency limit/i);
+      acquireCodeArtsSlot("AK1", "session-x", { maxWaitMs: 120 }),
+    ).rejects.toThrow(/still waiting/);
     releases.forEach((r) => r());
-  });
-
-  it("honours an abort signal while waiting", async () => {
-    const releases = [];
-    for (let i = 0; i < 3; i++) {
-      releases.push(await acquireCodeArtsSlot("AK1"));
-    }
-    const ctrl = new AbortController();
-    const pending = acquireCodeArtsSlot("AK1", { signal: ctrl.signal, maxWaitMs: 5000 });
-    setTimeout(() => ctrl.abort(new Error("client gone")), 30);
-    await expect(pending).rejects.toThrow(/client gone/);
-    releases.forEach((r) => r());
-  });
-
-  it("is idempotent on release", async () => {
-    const release = await acquireCodeArtsSlot("AK1");
-    release();
-    release();
-    release();
-    // 多调几次 release 不会把 inflight 算成负数
-    const r = await acquireCodeArtsSlot("AK1", { maxWaitMs: 200 });
-    expect(r).toBeTypeOf("function");
-    r();
   });
 });

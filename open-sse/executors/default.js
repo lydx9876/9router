@@ -197,7 +197,16 @@ export class DefaultExecutor extends BaseExecutor {
     return BEARER;
   }
 
-  buildHeaders(credentials, stream = true, url, model, body = null) {
+  /**
+   * @param {object} credentials
+   * @param {boolean} stream
+   * @param {string} url
+   * @param {string} model
+   * @param {object} body 已转换的请求体
+   * @param {string} [providerSessionId] 稳定的会话标识（同一轮对话多次请求相同），
+   *   用于那些按会话计数的上游（如 codearts-cn 的 x-ot-session-id）
+   */
+  buildHeaders(credentials, stream = true, url, model, body = null, providerSessionId = null) {
     const rt = credentials?.runtimeTransport;
     const headers = { "Content-Type": "application/json", ...(rt ? rt.headers : this.config.headers) };
     const desc = rt?.auth || AUTH_DESCRIPTORS[this.provider] || this.resolveAuthDescriptor();

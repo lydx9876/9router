@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 import { DefaultExecutor } from "./default.js";
 import { signCodeArtsRequest } from "../utils/codeartsSignature.js";
@@ -164,8 +164,8 @@ export class CodeArtsExecutor extends DefaultExecutor {
     });
   }
 
-  buildHeaders(credentials, stream = true, url = null, model = null, body = null) {
-    const headers = super.buildHeaders(credentials, stream, url, model, body);
+  buildHeaders(credentials, stream = true, url = null, model = null, body = null, providerSessionId = null) {
+    const headers = super.buildHeaders(credentials, stream, url, model, body, providerSessionId);
 
     // 去掉默认的 Bearer —— 码道网关不认，只认 IAM 签名
     delete headers["Authorization"];
@@ -184,7 +184,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
     headers["x-ot-trace-id"] = uuidNoDashes();
     headers["x-ot-span-id"] = uuidNoDashes();
     headers["x-snap-traceid"] = uuidNoDashes();
-    headers["x-ot-session-id"] = `ses_${uuidNoDashes()}`;
+    headers["x-ot-session-id"] = this.resolveUpstreamSessionId(providerSessionId);
     headers["user-session-id"] = headers["x-ot-session-id"];
     headers["x-ot-parent-session-id"] = "";
     headers["user-msg-id"] = "";
@@ -193,6 +193,38 @@ export class CodeArtsExecutor extends DefaultExecutor {
     headers["model-name"] = model || "";
 
     return headers;
+  }
+
+  /**
+   * 推导上游的会话 id。
+   *
+   * ⚠️ 码道的「并发会话数已达上限(3个)」限的是**账号下同时活跃的不同
+   * x-ot-session-id 的个数**，不是同时在飞的请求数。实测：
+   *
+   *   - 固定同一个 x-ot-session-id 连发 6 次 → 全部 200
+   *   - 每次换一个新的 x-ot-session-id    → 第 4 个开始 400 TM.00001041
+   *
+   * 所以每次请求都生成新的 session id 会让「一次对话」很快占满 3 个槽位，
+   * 客户端再发第 4 条就报并发超限 —— 而用户明明只有一个会话。
+   *
+   * 因此这里用 9router 的 providerSessionId（同一轮对话内稳定）派生，
+   * 保证一轮对话只占一个上游会话。
+   *
+   * @param {string|null} providerSessionId
+   * @returns {string} 形如 ses_<32 位 hex>
+   */
+  resolveUpstreamSessionId(providerSessionId) {
+    const seed = String(providerSessionId || "").trim();
+    if (!seed) {
+      // 没有会话标识（例如直接调 executor）——退回随机，但同一个连接内保持稳定
+      if (!this._fallbackSessionId) {
+        this._fallbackSessionId = `ses_${uuidNoDashes()}`;
+      }
+      return this._fallbackSessionId;
+    }
+    // 派生成 32 位 hex，保持 CLI 的 "ses_" + 32 hex 形状
+    const digest = createHash("sha256").update(`codearts-cn:${seed}`).digest("hex");
+    return `ses_${digest.slice(0, 32)}`;
   }
 
   transformRequest(model, body, stream, credentials) {
@@ -372,7 +404,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
   }
 
   async execute(params) {
-    const { model, body, stream, credentials, signal } = params;
+    const { model, body, stream, credentials, signal, providerSessionId } = params;
     const { accessKeyId } = this.getCredentials(credentials);
 
     // 拿不到凭据时不排队 —— 让 buildHeaders 抛出带说明的错误
@@ -390,7 +422,10 @@ export class CodeArtsExecutor extends DefaultExecutor {
       );
     }
 
-    const release = await acquireCodeArtsSlot(accessKeyId, { signal });
+    // 闸门按**上游 session id** 计数 —— 码道限的是账号下活跃的不同会话数，
+    // 不是同时在飞的请求数。同一对话的串行请求因此不会互相排队。
+    const upstreamSessionId = this.resolveUpstreamSessionId(providerSessionId);
+    const release = await acquireCodeArtsSlot(accessKeyId, upstreamSessionId, { signal });
     try {
       const result = await super.execute(params);
       // 槽位必须等响应体读完才释放：码道的流式响应在调用方消费 body 时
@@ -475,11 +510,16 @@ export class CodeArtsExecutor extends DefaultExecutor {
       return { valid: false, error: "accessKeyId and secretAccessKey are required" };
     }
 
-    // 探测也占上游槽位。不排队的话，在账号满载时会拿到 400 并发错误，
+    // 探测也占上游会话名额。不排队的话，在账号满载时会拿到 400 并发错误，
     // 被误判成“凭据无效”。这里排队等待，超时则报“暂时无法验证”。
+    // 探测用自己的 session id —— 不能占用用户对话的名额。
     let release;
     try {
-      release = await acquireCodeArtsSlot(accessKeyId, { maxWaitMs: 45_000 });
+      release = await acquireCodeArtsSlot(
+        accessKeyId,
+        `probe_${this.resolveUpstreamSessionId(null)}`,
+        { maxWaitMs: 45_000 },
+      );
     } catch {
       return {
         valid: false,

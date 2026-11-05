@@ -649,6 +649,21 @@ export default function ProfilePage() {
     }
   };
 
+  const updateFileLogsEnabled = async (enabled) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enableRequestFileLogs: enabled }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, enableRequestFileLogs: enabled }));
+      }
+    } catch (err) {
+      console.error("Failed to update enableRequestFileLogs:", err);
+    }
+  };
+
   const reloadSettings = async () => {
     try {
       const res = await fetch("/api/settings");
@@ -740,6 +755,7 @@ export default function ProfilePage() {
   };
 
   const observabilityEnabled = settings.enableObservability === true;
+  const fileLogsEnabled = settings.enableRequestFileLogs === true;
 
   const handleShutdown = async () => {
     setIsShuttingDown(true);
@@ -1616,6 +1632,22 @@ export default function ProfilePage() {
             <Toggle
               checked={observabilityEnabled}
               onChange={updateObservabilityEnabled}
+              disabled={loading}
+            />
+          </div>
+
+          <div className="flex items-start sm:items-center justify-between gap-4 mt-4 pt-4 border-t border-black/5 dark:border-white/5">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-sm sm:text-base">Write raw request logs to disk</p>
+              <p className="text-xs sm:text-sm text-text-muted">
+                Debugging aid — writes full request bodies and headers to{" "}
+                <code className="font-mono">logs/</code>. Separate from the details above,
+                and it grows without limit.
+              </p>
+            </div>
+            <Toggle
+              checked={fileLogsEnabled}
+              onChange={updateFileLogsEnabled}
               disabled={loading}
             />
           </div>

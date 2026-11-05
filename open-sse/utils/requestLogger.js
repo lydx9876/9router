@@ -1,8 +1,41 @@
 // Check if running in Node.js environment (has fs module)
 const isNode = typeof process !== "undefined" && process.versions?.node && typeof window === "undefined";
 
-// Check if logging is enabled via environment variable (default: false)
-const LOGGING_ENABLED = typeof process !== "undefined" && process.env?.ENABLE_REQUEST_LOGS === 'true';
+// The deep request logs under logs/ are a debugging aid: they write full
+// request bodies AND headers to disk, so they stay opt-in and are controlled
+// independently from the Usage → Details database.
+//
+//   ENABLE_REQUEST_LOGS=true  → always on
+//   ENABLE_REQUEST_LOGS=false → off unless the Profile toggle turns it on
+//   (unset)                  → off unless the Profile toggle turns it on
+//
+// The toggle is read per call rather than cached at module load so a change
+// takes effect without a restart.
+
+/**
+ * Read the settings lazily.
+ *
+ * The settings repo lives in the app layer while this module sits in open-sse,
+ * so the import is dynamic — a static one would create a cycle. A failed
+ * import just means the toggle stays off.
+ */
+async function readSettings() {
+  try {
+    const { getSettings } = await import("@/lib/localDb.js");
+    return await getSettings();
+  } catch {
+    return null;
+  }
+}
+
+/** @returns {Promise<boolean>} whether file logging should run */
+async function isFileLoggingEnabled() {
+  if (typeof process !== "undefined" && process.env?.ENABLE_REQUEST_LOGS === "true") {
+    return true;
+  }
+  const settings = await readSettings();
+  return settings?.enableRequestFileLogs === true;
+}
 
 let fs = null;
 let path = null;
@@ -10,7 +43,7 @@ let LOGS_DIR = null;
 
 // Lazy load Node.js modules (avoid top-level await)
 async function ensureNodeModules() {
-  if (!isNode || !LOGGING_ENABLED || fs) return;
+  if (!isNode || fs) return;
   try {
     fs = await import("fs");
     path = await import("path");
@@ -72,22 +105,23 @@ function writeJsonFile(sessionPath, filename, data) {
 // Mask sensitive data in headers (DISABLED - keep full token for testing)
 function maskSensitiveHeaders(headers) {
   if (!headers) return {};
-  return { ...headers };
-  
-  // Old masking code (disabled):
-  // const masked = { ...headers };
-  // const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token"];
-  // 
-  // for (const key of Object.keys(masked)) {
-  //   const lowerKey = key.toLowerCase();
-  //   if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
-  //     const value = masked[key];
-  //     if (value && value.length > 20) {
-  //       masked[key] = value.slice(0, 10) + "..." + value.slice(-5);
-  //     }
-  //   }
-  // }
-  // return masked;
+
+  // The masking used to be disabled ("keep full token for testing"), which meant
+  // every log folder contained a usable Authorization token. The logs land in a
+  // directory that is easy to share or back up, so credentials are masked here.
+  const masked = { ...headers };
+  const sensitiveKeys = [
+    "authorization", "x-api-key", "cookie", "token",
+    "x-security-token", "x-auth-token",
+  ];
+  for (const key of Object.keys(masked)) {
+    const lowerKey = key.toLowerCase();
+    if (!sensitiveKeys.some((sk) => lowerKey.includes(sk))) continue;
+    const value = masked[key];
+    if (typeof value !== "string" || value.length === 0) continue;
+    masked[key] = value.length > 20 ? `${value.slice(0, 10)}...${value.slice(-5)}` : "***";
+  }
+  return masked;
 }
 
 // No-op logger when logging is disabled
@@ -116,7 +150,7 @@ function createNoOpLogger() {
  */
 export async function createRequestLogger(sourceFormat, targetFormat, model) {
   // Return no-op logger if logging is disabled
-  if (!LOGGING_ENABLED) {
+  if (!(await isFileLoggingEnabled())) {
     return createNoOpLogger();
   }
   

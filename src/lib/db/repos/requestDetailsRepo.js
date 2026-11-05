@@ -16,23 +16,24 @@ async function getObservabilityConfig() {
     const { getSettings } = await import("./settingsRepo.js");
     const settings = await getSettings();
     const envRequestLogs = process.env.ENABLE_REQUEST_LOGS;
-    if (envRequestLogs !== undefined) {
-      const enabled = envRequestLogs.toLowerCase() === "true";
-      cachedConfig = {
-        enabled,
-        maxRecords: settings.observabilityMaxRecords || parseInt(process.env.OBSERVABILITY_MAX_RECORDS || String(DEFAULT_MAX_RECORDS), 10),
-        batchSize: settings.observabilityBatchSize || parseInt(process.env.OBSERVABILITY_BATCH_SIZE || String(DEFAULT_BATCH_SIZE), 10),
-        flushIntervalMs: settings.observabilityFlushIntervalMs || parseInt(process.env.OBSERVABILITY_FLUSH_INTERVAL_MS || String(DEFAULT_FLUSH_INTERVAL_MS), 10),
-        maxJsonSize: (settings.observabilityMaxJsonSize || parseInt(process.env.OBSERVABILITY_MAX_JSON_SIZE || "5", 10)) * 1024,
-      };
-      cachedConfigTs = Date.now();
-      return cachedConfig;
-    }
-    const envFallback = process.env.OBSERVABILITY_ENABLED !== "false";
-    const uiFlag = typeof settings.enableObservability === "boolean";
-    const enabled = uiFlag
-      ? settings.enableObservability
-      : envFallback;
+
+    // The request-details database (Usage → Details) and the deep request
+    // logs under logs/ are two separate features and get two separate switches.
+    //
+    //   ENABLE_REQUEST_LOGS=true  → force the file logs on (they are a debugging
+    //                               aid; they write full request bodies and
+    //                               headers to disk, so they stay opt-in)
+    //   ENABLE_REQUEST_LOGS=false → file logs off, Details follows the UI switch
+    //   (unset)                  → file logs off, Details follows the UI switch
+    //
+    // Before this split, ANY value of the env var — including "false" — took
+    // precedence over the UI switch, so setting ENABLE_REQUEST_LOGS=false (the
+    // value in .env.example) silently disabled Usage → Details no matter what
+    // the toggle in Profile said.
+    const envFileLogsEnabled = envRequestLogs?.toLowerCase() === "true";
+    const envDetailsForced = process.env.OBSERVABILITY_ENABLED === "true";
+    const uiDetailsEnabled = settings.enableObservability === true;
+    const enabled = envDetailsForced || uiDetailsEnabled;
 
     cachedConfig = {
       enabled,
@@ -157,6 +158,12 @@ export async function saveRequestDetail(detail) {
       flushToDatabase().catch(() => {});
     }, config.flushIntervalMs);
   }
+}
+
+/** Test helper: the resolved on/off state of the details database. */
+export async function getObservabilityConfigForTest() {
+  const config = await getObservabilityConfig();
+  return config.enabled;
 }
 
 export async function getRequestDetails(filter = {}) {

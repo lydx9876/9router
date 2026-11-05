@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS = {
   samlAttributeEmail: "email",
   samlAttributeName: "name",
   enableObservability: false,
+  // Deep request logs under logs/ — separate from the Details database above.
+  // They write full request bodies and headers to disk, so they stay opt-in.
+  enableRequestFileLogs: false,
   observabilityMaxRecords: 1000,
   observabilityBatchSize: 20,
   observabilityFlushIntervalMs: 5000,

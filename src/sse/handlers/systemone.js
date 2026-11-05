@@ -68,7 +68,7 @@ export async function handleSystemone(request) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: questions");
   }
 
-  const modelInfo = await getModelInfo(modelStr);
+  const modelInfo = await getModelInfo(modelStr, "systemone");
   if (!modelInfo.provider) {
     log.warn("SYSTEMONE", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");

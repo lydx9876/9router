@@ -34,8 +34,14 @@ export async function resolveModelAlias(alias) {
 
 /**
  * Get full model info (parse or resolve)
+ *
+ * @param {string} modelStr
+ * @param {string} [kind] the kind of endpoint the caller serves ("embedding",
+ *   "rerank", …). A prefix may be shared by several node types — a user can
+ *   have both a custom-embedding and a custom-rerank node called "gitee" —
+ *   so the kind picks the right node.
  */
-export async function getModelInfo(modelStr) {
+export async function getModelInfo(modelStr, kind = null) {
   const parsed = parseModel(modelStr);
 
   if (!parsed.isAlias) {
@@ -54,14 +60,32 @@ export async function getModelInfo(modelStr) {
         return { provider: matchedAnthropic.id, model: parsed.model };
       }
 
-      const embeddingNodes = await getProviderNodes({ type: "custom-embedding" });
-      const matchedEmbedding = embeddingNodes.find((node) => node.prefix === parsed.providerAlias);
+      // A prefix may be shared by several node types — a user can have a
+      // custom-embedding node and a custom-rerank node both called "gitee".
+      // The endpoint's kind picks the right one; without it, the first match
+      // wins and a rerank request lands on the embedding node.
+      const byPrefix = async (type) => {
+        const nodes = await getProviderNodes({ type });
+        return nodes.find((node) => node.prefix === parsed.providerAlias) || null;
+      };
+
+      const kindToNodeType = {
+        embedding: "custom-embedding",
+        rerank: "custom-rerank",
+      };
+      if (kind && kindToNodeType[kind]) {
+        const preferred = await byPrefix(kindToNodeType[kind]);
+        if (preferred) {
+          return { provider: preferred.id, model: parsed.model };
+        }
+      }
+
+      const matchedEmbedding = await byPrefix("custom-embedding");
       if (matchedEmbedding) {
         return { provider: matchedEmbedding.id, model: parsed.model };
       }
 
-      const rerankNodes = await getProviderNodes({ type: "custom-rerank" });
-      const matchedRerank = rerankNodes.find((node) => node.prefix === parsed.providerAlias);
+      const matchedRerank = await byPrefix("custom-rerank");
       if (matchedRerank) {
         return { provider: matchedRerank.id, model: parsed.model };
       }

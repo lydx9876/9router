@@ -72,7 +72,7 @@ export async function handleRerank(request) {
     );
   }
 
-  const modelInfo = await getModelInfo(modelStr);
+  const modelInfo = await getModelInfo(modelStr, "rerank");
   if (!modelInfo.provider) {
     log.warn("RERANK", "Invalid model format", { model: modelStr });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");

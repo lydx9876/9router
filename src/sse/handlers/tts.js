@@ -71,7 +71,7 @@ export async function handleTts(request) {
 }
 
 async function handleSingleModelTts(body, modelStr, responseFormat, language, style) {
-  const modelInfo = await getModelInfo(modelStr);
+  const modelInfo = await getModelInfo(modelStr, "tts");
   if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
 
   const { provider, model } = modelInfo;

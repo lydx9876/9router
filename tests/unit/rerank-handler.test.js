@@ -115,6 +115,40 @@ describe("custom rerank normalize", () => {
     const out = customRerank.normalize({}, "m");
     expect(out.results).toEqual([]);
   });
+
+  it("unwraps a document object into a string", () => {
+    // Gitee AI (and vLLM / TEI) return the document as { "text": "..." }.
+    // Passing that object straight through crashed the dashboard with
+    // "Objects are not valid as a React child".
+    const out = customRerank.normalize(
+      { results: [{ index: 0, relevance_score: 0.9, document: { text: "hello" } }] },
+      "m",
+    );
+    expect(out.results[0].document).toBe("hello");
+    expect(typeof out.results[0].document).toBe("string");
+  });
+
+  it("unwraps the other document shapes servers use", () => {
+    const cases = [
+      [{ text: "a" }, "a"],
+      [{ content: "b" }, "b"],
+      [{ page_content: "c" }, "c"],
+      [{ text: { value: "d" } }, "d"],
+      ["plain", "plain"],
+    ];
+    for (const [input, expected] of cases) {
+      const out = customRerank.normalize(
+        { results: [{ index: 0, relevance_score: 0.5, document: input }] },
+        "m",
+      );
+      expect(out.results[0].document).toBe(expected);
+    }
+  });
+
+  it("keeps the model the server reported", () => {
+    const out = customRerank.normalize({ model: "Qwen3-Reranker-8B", results: [] }, "m");
+    expect(out.model).toBe("Qwen3-Reranker-8B");
+  });
 });
 
 describe("handleRerankCore", () => {

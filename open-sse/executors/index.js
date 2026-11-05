@@ -34,6 +34,7 @@ import TraeExecutor from "./trae.js";
 import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
+import { CustomNodeExecutor } from "./customNode.js";
 import { MinimaxCodeExecutor } from "./minimax-code.js";
 import { DevinCliExecutor } from "./devin-cli.js";
 
@@ -92,9 +93,22 @@ const executors = {
 };
 
 const defaultCache = new Map();
+const customNodeCache = new Map();
+
+/** Prefixes of the self-hosted node providers that read their URL from the connection. */
+const CUSTOM_NODE_PREFIXES = ["custom-embedding-", "custom-rerank-"];
 
 export function getExecutor(provider) {
   if (executors[provider]) return executors[provider];
+  // Self-hosted nodes carry their base URL in the connection, not in a
+  // registry entry — without this they would fall back to DefaultExecutor's
+  // default host (api.openai.com) and send the payload there.
+  if (typeof provider === "string" && CUSTOM_NODE_PREFIXES.some((p) => provider.startsWith(p))) {
+    if (!customNodeCache.has(provider)) {
+      customNodeCache.set(provider, new CustomNodeExecutor(provider));
+    }
+    return customNodeCache.get(provider);
+  }
   if (!defaultCache.has(provider)) defaultCache.set(provider, new DefaultExecutor(provider));
   return defaultCache.get(provider);
 }

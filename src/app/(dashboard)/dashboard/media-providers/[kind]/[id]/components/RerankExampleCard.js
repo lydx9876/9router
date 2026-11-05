@@ -254,8 +254,10 @@ export function RerankExampleCard({ providerId, customAlias }) {
                         />
                       </div>
                     )}
-                    {r.document && (
-                      <p className="mt-1.5 line-clamp-2 text-xs text-text-main">{r.document}</p>
+                    {r.document != null && (
+                      <p className="mt-1.5 line-clamp-2 text-xs text-text-main">
+                        {typeof r.document === "string" ? r.document : JSON.stringify(r.document)}
+                      </p>
                     )}
                   </div>
                 );

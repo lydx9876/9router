@@ -43,6 +43,11 @@ const DEFAULT_SETTINGS = {
   // Deep request logs under logs/ — separate from the Details database above.
   // They write full request bodies and headers to disk, so they stay opt-in.
   enableRequestFileLogs: false,
+  // The Details database holds full conversation payloads. The API redacts them
+  // by default because anyone who can reach the dashboard could otherwise read
+  // every conversation. Turning this on makes the Details drawer show real
+  // request/response bodies — only sensible on a machine you trust.
+  showRequestDetailPayloads: false,
   observabilityMaxRecords: 1000,
   observabilityBatchSize: 20,
   observabilityFlushIntervalMs: 5000,

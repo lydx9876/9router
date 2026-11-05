@@ -664,6 +664,21 @@ export default function ProfilePage() {
     }
   };
 
+  const updateShowPayloads = async (enabled) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ showRequestDetailPayloads: enabled }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, showRequestDetailPayloads: enabled }));
+      }
+    } catch (err) {
+      console.error("Failed to update showRequestDetailPayloads:", err);
+    }
+  };
+
   const reloadSettings = async () => {
     try {
       const res = await fetch("/api/settings");
@@ -756,6 +771,7 @@ export default function ProfilePage() {
 
   const observabilityEnabled = settings.enableObservability === true;
   const fileLogsEnabled = settings.enableRequestFileLogs === true;
+  const showPayloadsEnabled = settings.showRequestDetailPayloads === true;
 
   const handleShutdown = async () => {
     setIsShuttingDown(true);
@@ -1648,6 +1664,22 @@ export default function ProfilePage() {
             <Toggle
               checked={fileLogsEnabled}
               onChange={updateFileLogsEnabled}
+              disabled={loading}
+            />
+          </div>
+
+          <div className="flex items-start sm:items-center justify-between gap-4 mt-4 pt-4 border-t border-black/5 dark:border-white/5">
+            <div className="flex-1 min-w-0">
+              <p className="font-medium text-sm sm:text-base">Show payloads in request details</p>
+              <p className="text-xs sm:text-sm text-text-muted">
+                The details above store full conversation bodies but the dashboard blanks
+                them out, so anyone who can reach it cannot read the history. Turn this on
+                only on a machine you trust.
+              </p>
+            </div>
+            <Toggle
+              checked={showPayloadsEnabled}
+              onChange={updateShowPayloads}
               disabled={loading}
             />
           </div>

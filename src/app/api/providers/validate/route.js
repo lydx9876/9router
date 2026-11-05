@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getProviderNodeById } from "@/models";
-import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, AI_PROVIDERS } from "@/shared/constants/providers";
+import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider, isCustomEmbeddingProvider, isCustomRerankProvider, AI_PROVIDERS } from "@/shared/constants/providers";
 import { getDefaultModel } from "open-sse/config/providerModels.js";
 import { resolveOllamaLocalHost, resolveXiaomiTokenplanBaseUrl, PROVIDERS } from "open-sse/config/providers.js";
 import { openaiToCommandCodeRequest } from "open-sse/translator/request/openai-to-commandcode.js";
@@ -123,6 +123,29 @@ export async function POST(request) {
         return NextResponse.json({
           valid: isValid,
           error: isValid ? null : "Invalid API key",
+        });
+      }
+
+      // Custom Rerank nodes: probe /rerank with a tiny document list.
+      // Self-hosted rerank servers usually ignore the API key, so a 401/403
+      // still counts as "reachable" — the key is not what we are testing here.
+      if (isCustomRerankProvider(provider)) {
+        const node = await getProviderNodeById(provider);
+        if (!node) {
+          return NextResponse.json({ error: "Custom Rerank node not found" }, { status: 404 });
+        }
+        const baseUrl = node.baseUrl?.replace(/\/$/, "").replace(/\/rerank$/, "");
+        const res = await fetch(`${baseUrl}/rerank`, {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "test", query: "ping", documents: ["ping", "pong"] }),
+        });
+        if (res.ok || res.status === 401 || res.status === 403) {
+          return NextResponse.json({ valid: true });
+        }
+        return NextResponse.json({
+          valid: false,
+          error: `Rerank endpoint unreachable (${res.status})`,
         });
       }
 

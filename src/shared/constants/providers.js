@@ -73,6 +73,7 @@ export const WEB_COOKIE_PROVIDERS = byCategory("webCookie");
 // Media provider kinds — each kind maps to a route and endpoint config
 export const MEDIA_PROVIDER_KINDS = [
   { id: "embedding",   label: "Embedding",      icon: "data_array",        endpoint: { method: "POST", path: "/v1/embeddings" } },
+  { id: "rerank",      label: "Rerank",         icon: "sort",               endpoint: { method: "POST", path: "/v1/rerank" }, isNew: true },
   { id: "image",       label: "Text to Image",  icon: "brush",             endpoint: { method: "POST", path: "/v1/images/generations" } },
   { id: "imageToText", label: "Image to Text",  icon: "image_search",      endpoint: { method: "POST", path: "/v1/images/understanding" } },
   { id: "tts",         label: "Text To Speech", icon: "record_voice_over", endpoint: { method: "POST", path: "/v1/audio/speech" } },
@@ -87,6 +88,7 @@ export const MEDIA_PROVIDER_KINDS = [
 export const OPENAI_COMPATIBLE_PREFIX = "openai-compatible-";
 export const ANTHROPIC_COMPATIBLE_PREFIX = "anthropic-compatible-";
 export const CUSTOM_EMBEDDING_PREFIX = "custom-embedding-";
+export const CUSTOM_RERANK_PREFIX = "custom-rerank-";
 
 export function isOpenAICompatibleProvider(providerId) {
   return typeof providerId === "string" && providerId.startsWith(OPENAI_COMPATIBLE_PREFIX);
@@ -98,6 +100,10 @@ export function isAnthropicCompatibleProvider(providerId) {
 
 export function isCustomEmbeddingProvider(providerId) {
   return typeof providerId === "string" && providerId.startsWith(CUSTOM_EMBEDDING_PREFIX);
+}
+
+export function isCustomRerankProvider(providerId) {
+  return typeof providerId === "string" && providerId.startsWith(CUSTOM_RERANK_PREFIX);
 }
 
 // All providers (combined)

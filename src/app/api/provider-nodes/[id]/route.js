@@ -48,6 +48,14 @@ export async function PUT(request, { params }) {
       }
     }
 
+    // Sanitize Base URL for Custom Rerank (strip trailing slash and /rerank)
+    if (node.type === "custom-rerank") {
+      sanitizedBaseUrl = sanitizedBaseUrl.replace(/\/$/, "");
+      if (sanitizedBaseUrl.endsWith("/rerank")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/rerank".length);
+      }
+    }
+
     const updates = {
       name: name.trim(),
       prefix: prefix.trim(),

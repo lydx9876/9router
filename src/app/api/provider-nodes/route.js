@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createProviderNode, getProviderNodes } from "@/models";
-import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX } from "@/shared/constants/providers";
+import { OPENAI_COMPATIBLE_PREFIX, ANTHROPIC_COMPATIBLE_PREFIX, CUSTOM_EMBEDDING_PREFIX, CUSTOM_RERANK_PREFIX } from "@/shared/constants/providers";
 import { generateId } from "@/shared/utils";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,10 @@ const ANTHROPIC_COMPATIBLE_DEFAULTS = {
 
 const CUSTOM_EMBEDDING_DEFAULTS = {
   baseUrl: "https://api.openai.com/v1",
+};
+
+const CUSTOM_RERANK_DEFAULTS = {
+  baseUrl: "http://localhost:8080/v1",
 };
 
 // GET /api/provider-nodes - List all provider nodes
@@ -71,6 +75,23 @@ export async function POST(request) {
       const node = await createProviderNode({
         id: `${CUSTOM_EMBEDDING_PREFIX}${generateId()}`,
         type: "custom-embedding",
+        prefix: prefix.trim(),
+        baseUrl: sanitizedBaseUrl,
+        name: name.trim(),
+      });
+      return NextResponse.json({ node }, { status: 201 });
+    }
+
+    if (nodeType === "custom-rerank") {
+      // Strip trailing slash and /rerank if user pasted the full endpoint
+      let sanitizedBaseUrl = (baseUrl || CUSTOM_RERANK_DEFAULTS.baseUrl).trim().replace(/\/$/, "");
+      if (sanitizedBaseUrl.endsWith("/rerank")) {
+        sanitizedBaseUrl = sanitizedBaseUrl.slice(0, -"/rerank".length);
+      }
+
+      const node = await createProviderNode({
+        id: `${CUSTOM_RERANK_PREFIX}${generateId()}`,
+        type: "custom-rerank",
         prefix: prefix.trim(),
         baseUrl: sanitizedBaseUrl,
         name: name.trim(),

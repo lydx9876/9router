@@ -105,6 +105,40 @@ export async function POST(request) {
       });
     }
 
+    // Custom Rerank Validation - test POST /rerank directly
+    if (type === "custom-rerank") {
+      const normalizedBase = baseUrl.trim().replace(/\/$/, "").replace(/\/rerank$/, "");
+      if (!modelId?.trim()) {
+        return NextResponse.json({ valid: false, error: "Model ID required for rerank validation" });
+      }
+      const rerankRes = await fetchWithTimeout(`${normalizedBase}/rerank`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: modelId.trim(),
+          query: "ping",
+          documents: ["ping", "pong"]
+        })
+      });
+      if (rerankRes.ok) {
+        const data = await rerankRes.json().catch(() => null);
+        const count = Array.isArray(data?.results) ? data.results.length : null;
+        return NextResponse.json({ valid: true, method: "rerank", results: count });
+      }
+      if (rerankRes.status === 401 || rerankRes.status === 403) {
+        return NextResponse.json({ valid: false, error: "API key unauthorized" });
+      }
+      const errBody = await rerankRes.text().catch(() => "");
+      return NextResponse.json({
+        valid: false,
+        error: `Rerank request failed (${rerankRes.status})${errBody ? `: ${errBody.slice(0, 200)}` : ""}`,
+        method: "rerank"
+      });
+    }
+
     // Anthropic Compatible Validation
     if (type === "anthropic-compatible") {
       let normalizedBase = baseUrl.trim().replace(/\/$/, "");

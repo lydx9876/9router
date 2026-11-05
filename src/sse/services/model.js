@@ -59,6 +59,12 @@ export async function getModelInfo(modelStr) {
       if (matchedEmbedding) {
         return { provider: matchedEmbedding.id, model: parsed.model };
       }
+
+      const rerankNodes = await getProviderNodes({ type: "custom-rerank" });
+      const matchedRerank = rerankNodes.find((node) => node.prefix === parsed.providerAlias);
+      if (matchedRerank) {
+        return { provider: matchedRerank.id, model: parsed.model };
+      }
     }
     return {
       provider: parsed.provider,

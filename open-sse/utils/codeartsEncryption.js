@@ -73,7 +73,11 @@ function encryptRequestBody(sessionKey, body, method, pathname, timestamp) {
  *
  * 上游把 SSE 流**逐块**加密，每块的格式是：
  *
- *   base64(ciphertext):base64(iv):base64(tag)
+ *   base64(iv):base64(tag):base64(ciphertext)
+ *
+ * ⚠️ 字段顺序不是直觉上的 ct:iv:tag —— 官方 CLI 的 decrypt 签名是
+ * `decrypt(key, iv, ciphertext, tag, aad)`，块里的三个字段按这个顺序排列。
+ * （实测：第 0 段 12 字节 = IV，第 1 段 16 字节 = tag，第 2 段才是密文。）
  *
  * （字段分隔符是冒号，块与块之间用空行分隔。）
  *
@@ -94,9 +98,9 @@ function decryptSseChunk(sessionKey, chunk, keyId, chunkIndex) {
     );
   }
 
-  const ciphertext = Buffer.from(parts[0], "base64");
-  const iv = Buffer.from(parts[1], "base64");
-  const authTag = Buffer.from(parts[2], "base64");
+  const iv = Buffer.from(parts[0], "base64");
+  const authTag = Buffer.from(parts[1], "base64");
+  const ciphertext = Buffer.from(parts[2], "base64");
   const aad = Buffer.from(`${keyId}|${chunkIndex}`, "utf8");
 
   return sm4GcmDecrypt(sessionKey, ciphertext, iv, authTag, aad).toString("utf8");

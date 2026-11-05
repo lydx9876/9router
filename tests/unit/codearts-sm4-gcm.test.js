@@ -144,8 +144,20 @@ describe("SM4-GCM", () => {
     expect(() => sm4GcmDecrypt(key, bad, iv, authTag, aad)).toThrow(/authentication tag mismatch/);
   });
 
-  it("rejects an IV of the wrong length", () => {
-    expect(() => sm4GcmEncrypt(key, Buffer.from("x"), Buffer.alloc(16), Buffer.alloc(0))).toThrow(/GCM IV/);
+  it("supports a non-96-bit IV via the GHASH-derived J0", () => {
+    // 码道的响应块用的是 16 字节 IV —— GCM 规范要求这种情况下
+    // J0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
+    const aad = Buffer.from("x");
+    const iv16 = crypto.randomBytes(16);
+    const plaintext = Buffer.from("hello 16-byte iv");
+    const { ciphertext, authTag } = sm4GcmEncrypt(key, plaintext, iv16, aad);
+    expect(hex(sm4GcmDecrypt(key, ciphertext, iv16, authTag, aad))).toBe(hex(plaintext));
+  });
+
+  it("rejects an empty IV", () => {
+    expect(() => sm4GcmEncrypt(key, Buffer.from("x"), Buffer.alloc(0), Buffer.alloc(0))).toThrow(
+      /must not be empty/,
+    );
   });
 });
 
@@ -211,10 +223,11 @@ describe("CodeArts request encryption", () => {
       iv,
       Buffer.from(`${keyId}|0`, "utf8"),
     );
+    // 官方 CLI 的字段顺序是 iv:tag:ciphertext
     const chunk = [
-      ciphertext.toString("base64"),
       iv.toString("base64"),
       authTag.toString("base64"),
+      ciphertext.toString("base64"),
     ].join(":");
 
     expect(decryptSseChunk(sessionKey, chunk, keyId, 0)).toBe(plaintext);

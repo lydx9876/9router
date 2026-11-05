@@ -28,7 +28,7 @@ describe("CodeArtsExecutor encrypted request", () => {
   });
 
   it("refuses to send a plaintext body when encryption is off", async () => {
-    delete process.env.CODEARTS_ENABLE_ENCRYPTED_BODY;
+    process.env.CODEARTS_ENABLE_ENCRYPTED_BODY = "0";
     const executor = new CodeArtsExecutor();
     await expect(
       executor.prepareOutgoingRequest({
@@ -137,10 +137,11 @@ describe("CodeArtsExecutor encrypted request", () => {
         iv,
         Buffer.from(`${keyId}|${index}`, "utf8"),
       );
+      // 官方 CLI 的字段顺序是 iv:tag:ciphertext
       return [
-        ciphertext.toString("base64"),
         iv.toString("base64"),
         authTag.toString("base64"),
+        ciphertext.toString("base64"),
       ].join(":");
     });
 
@@ -192,10 +193,11 @@ describe("CodeArtsExecutor encrypted request", () => {
       iv,
       Buffer.from(`${keyId}|0`, "utf8"),
     );
+    // 官方 CLI 的字段顺序是 iv:tag:ciphertext
     const chunk = [
-      ciphertext.toString("base64"),
       iv.toString("base64"),
       authTag.toString("base64"),
+      ciphertext.toString("base64"),
     ].join(":");
 
     expect(decryptSseChunk(sessionKey, chunk, keyId, 0)).toBe(plain);

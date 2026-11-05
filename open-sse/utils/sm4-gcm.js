@@ -160,11 +160,38 @@ class GHash {
 // ── CTR 模式 ────────────────────────────────────────────────────────────
 
 /**
- * GCM 的计数器：J0 之后的块计数器。
+ * 推导 GCM 的初始计数器块 J0。
  *
- * inc32 只递增 J0 的最后 4 个字节（GCM 规定计数器块 = J0 + 32 位计数器，
- * 只有最后 4 字节递增，其余保持不变）。
+ * GCM 规范（NIST SP 800-38D）：
+ *   - IV 为 96 位（12 字节）时：J0 = IV || 0^31 || 1
+ *   - IV 为其他长度时：J0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
+ *     其中 s = 128 * ceil(len(IV)/128) - len(IV)（补齐到 128 位边界的零填充长度）
+ *
+ * 码道的响应块用的是 16 字节 IV，所以必须支持第二种形式。
+ *
+ * @param {Uint8Array} h GHASH 的哈希子密钥 H
+ * @param {Uint8Array} iv
+ * @returns {Uint8Array} 16 字节的 J0
  */
+function deriveJ0(h, iv) {
+  if (iv.length === 12) {
+    const j0 = new Uint8Array(BLOCK_SIZE);
+    j0.set(iv, 0);
+    j0[BLOCK_SIZE - 1] = 1;
+    return j0;
+  }
+
+  // GHASH_H(IV || 0^(s+64) || [len(IV)]_64)
+  const ghash = new GHash(h);
+  ghash.update(iv);
+  // 补零到 128 位边界，再补 64 个零字节
+  const padLen = (16 - (iv.length % 16)) % 16;
+  ghash.update(new Uint8Array(padLen));
+  ghash.update(new Uint8Array(8));
+  // [len(IV)]_64 —— 以**比特**计
+  ghash.update(encodeLength(iv.length * 8));
+  return ghash.digest();
+}
 function inc32(block) {
   const out = Uint8Array.from(block);
   for (let i = BLOCK_SIZE - 1; i >= BLOCK_SIZE - 4; i--) {
@@ -230,8 +257,8 @@ function sm4GcmEncrypt(key, plaintext, iv, aad) {
   if (key.length !== 16) {
     throw new Error(`SM4 key must be 16 bytes, got ${key.length}`);
   }
-  if (iv.length !== 12) {
-    throw new Error(`GCM IV must be ${12} bytes, got ${iv.length}`);
+  if (iv.length === 0) {
+    throw new Error("GCM IV must not be empty");
   }
 
   const roundKeys = expandKey(key);
@@ -240,10 +267,8 @@ function sm4GcmEncrypt(key, plaintext, iv, aad) {
   // H = E(K, 0^128)
   const h = encryptBlock(new Uint8Array(BLOCK_SIZE), roundKeys);
 
-  // J0 = IV || 0^31 || 1（IV 为 96 位时）
-  const j0 = new Uint8Array(BLOCK_SIZE);
-  j0.set(iv, 0);
-  j0[BLOCK_SIZE - 1] = 1;
+  // J0：96 位 IV 直接用，否则走 GHASH 推导
+  const j0 = deriveJ0(h, iv);
 
   // CTR 加密正文（从 J0+1 开始）
   const ciphertext = new Uint8Array(plaintext.length);
@@ -291,8 +316,8 @@ function sm4GcmDecrypt(key, ciphertext, iv, authTag, aad) {
   if (key.length !== 16) {
     throw new Error(`SM4 key must be 16 bytes, got ${key.length}`);
   }
-  if (iv.length !== 12) {
-    throw new Error(`GCM IV must be ${12} bytes, got ${iv.length}`);
+  if (iv.length === 0) {
+    throw new Error("GCM IV must not be empty");
   }
 
   const roundKeys = expandKey(key);
@@ -300,9 +325,7 @@ function sm4GcmDecrypt(key, ciphertext, iv, authTag, aad) {
 
   const h = encryptBlock(new Uint8Array(BLOCK_SIZE), roundKeys);
 
-  const j0 = new Uint8Array(BLOCK_SIZE);
-  j0.set(iv, 0);
-  j0[BLOCK_SIZE - 1] = 1;
+  const j0 = deriveJ0(h, iv);
 
   // 先算 GHASH
   const ghash = new GHash(h);

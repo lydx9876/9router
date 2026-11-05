@@ -74,26 +74,23 @@ describe("codearts-cn executor", () => {
     ).toThrow(/accessKeyId and secretAccessKey/);
   });
 
-  it("probe reports 'not ready' instead of blaming the credentials", async () => {
+  it("probe reports invalid credentials instead of blaming a missing feature", async () => {
     const executor = new CodeArtsExecutor();
     const psd = {
       accessKeyId: "AKIDEXAMPLE",
       secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
     };
 
-    // 加密层未实现时，chat 端点对明文一律 401。这个信号不能用来判定
-    // 凭据无效 —— 签名本身是对的（canonicalRequestHash 与官方 CLI 一致）。
-    // 所以 probe 必须直说“功能未就绪”，而不是报“凭据错误”。
-    const notReady = await executor.probeCredentials(
+    // 加密层已经实现，chat 端点能真正判定凭据：401 就是凭据无效。
+    const invalid = await executor.probeCredentials(
       { providerSpecificData: psd },
       async () =>
         new Response(JSON.stringify({ error_msg: "verify ak sk signature fail" }), {
           status: 401,
         }),
     );
-    expect(notReady.valid).toBe(false);
-    expect(notReady.error).toMatch(/SM4-GCM/);
-    expect(notReady.error).not.toMatch(/Invalid AK\/SK/);
+    expect(invalid.valid).toBe(false);
+    expect(invalid.error).not.toMatch(/not ready|SM4-GCM/);
 
     const missing = await executor.probeCredentials(
       { providerSpecificData: {} },
@@ -103,25 +100,32 @@ describe("codearts-cn executor", () => {
     expect(missing.error).toMatch(/required/);
   });
 
-  it("execute refuses to send an unencrypted body, with an actionable message", async () => {
+  it("execute refuses to send a plaintext body when the encrypted path is off", async () => {
     const executor = new CodeArtsExecutor();
     const psd = {
       accessKeyId: "AKIDEXAMPLE",
       secretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
     };
-    await expect(
-      executor.execute({
-        model: "deepseek-v4.1-flash-1017",
-        body: {
+    const original = process.env.CODEARTS_ENABLE_ENCRYPTED_BODY;
+    process.env.CODEARTS_ENABLE_ENCRYPTED_BODY = "0";
+    try {
+      await expect(
+        executor.execute({
           model: "deepseek-v4.1-flash-1017",
-          messages: [{ role: "user", content: "hi" }],
+          body: {
+            model: "deepseek-v4.1-flash-1017",
+            messages: [{ role: "user", content: "hi" }],
+            stream: true,
+          },
           stream: true,
-        },
-        stream: true,
-        credentials: { provider: "codearts-cn", providerSpecificData: psd },
-        log: null,
-        proxyOptions: null,
-      }),
-    ).rejects.toThrow(/SM4-GCM/);
+          credentials: { provider: "codearts-cn", providerSpecificData: psd },
+          log: null,
+          proxyOptions: null,
+        }),
+      ).rejects.toThrow(/SM4-GCM/);
+    } finally {
+      if (original === undefined) delete process.env.CODEARTS_ENABLE_ENCRYPTED_BODY;
+      else process.env.CODEARTS_ENABLE_ENCRYPTED_BODY = original;
+    }
   });
 });

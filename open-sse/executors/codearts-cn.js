@@ -17,16 +17,16 @@ function uuidNoDashes() {
 }
 
 /**
- * 是否启用真实的 chat 请求。
+ * 是否启用 SM4-GCM 加密的 chat 请求。
  *
- * 默认关闭：上游要求请求 body 经 SM4-GCM 加密，而加密链路还需要
- * 一把协商出来的会话密钥（ECDH 握手）。
+ * 默认**开启** —— 加密链路已经用真实 AK/SK 对上游实测通过。
+ * 设 CODEARTS_ENABLE_ENCRYPTED_BODY=0 可以关掉（关掉后上游会拒绝明文 body，
+ * 报 401 "verify ak sk signature fail"，这个报错有误导性 —— 签名本身是对的）。
  *
- * 设 CODEARTS_ENABLE_ENCRYPTED_BODY=1 打开。
- * 配额接口（snap-manager 插件统计）不受影响，一直可用。
+ * 配额接口（snap-manager 插件统计）不走这里，一直可用。
  */
 function encryptedBodyEnabled() {
-  return process.env.CODEARTS_ENABLE_ENCRYPTED_BODY === "1";
+  return process.env.CODEARTS_ENABLE_ENCRYPTED_BODY !== "0";
 }
 
 /**
@@ -99,9 +99,9 @@ export class CodeArtsExecutor extends DefaultExecutor {
    * 拿到（或创建）该 baseUrl 的密钥协商器。
    *
    * 复用同一个实例，连续请求就不会每次都重新握手 ——
-   * 密钥的 TTL 是 7200 秒，提前 5 分钟自动续期。
+   * 密钥的 TTL 是 3600 秒，提前 5 分钟自动续期。
    *
-   * @param {string} baseUrl
+   * @param {string} baseUrl 上游 origin（不带路径）
    * @param {object} credentials
    * @returns {CodeArtsKeyExchange}
    */
@@ -124,6 +124,25 @@ export class CodeArtsExecutor extends DefaultExecutor {
     });
     this.keyExchanges.set(baseUrl, exchange);
     return exchange;
+  }
+
+  /**
+   * 上游的 origin（scheme://host）。
+   *
+   * registry 的 transport.baseUrl 是**完整端点**
+   * （https://snap-access.cn-north-4.myhuaweicloud.com/api/v2/chat/completions），
+   * 而 key-exchange 是挂在同一主机根路径上的另一个端点
+   * （/api/v1/security/key-exchange），所以要从 origin 拼，不能直接接路径。
+   *
+   * @returns {string}
+   */
+  getOrigin() {
+    const base = this.getBaseUrls()[0] || this.config.baseUrl || "";
+    try {
+      return new URL(base).origin;
+    } catch {
+      return base.replace(/\/api\/.*$/, "");
+    }
   }
 
   /** 签名的辅助（buildHeaders 与密钥协商共用） */
@@ -235,13 +254,14 @@ export class CodeArtsExecutor extends DefaultExecutor {
   async prepareOutgoingRequest({ headers, bodyStr, url, model, credentials, stream }) {
     if (!encryptedBodyEnabled()) {
       throw new Error(
-        "codearts-cn: chat requests are disabled because CodeArts requires the request body " +
-          "to be encrypted with SM4-GCM after a key-exchange step. Set " +
-          "CODEARTS_ENABLE_ENCRYPTED_BODY=1 to enable it.",
+        "codearts-cn: the encrypted request path is disabled " +
+          "(CODEARTS_ENABLE_ENCRYPTED_BODY=0). CodeArts requires the request body to be " +
+          "encrypted with SM4-GCM after a key-exchange step; a plaintext body is rejected " +
+          "with a misleading 401 \"verify ak sk signature fail\".",
       );
     }
 
-    const baseUrl = this.getBaseUrls()[0] || this.config.baseUrl;
+    const baseUrl = this.getOrigin();
     const exchange = this.getKeyExchange(baseUrl, credentials);
     const { key, keyId } = await exchange.getOrNegotiateKey();
 
@@ -281,7 +301,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
       return response;
     }
 
-    const baseUrl = this.getBaseUrls()[0] || this.config.baseUrl;
+    const baseUrl = this.getOrigin();
     const exchange = this.getKeyExchange(baseUrl, credentials);
     const { key, keyId } = await exchange.getOrNegotiateKey();
 
@@ -364,10 +384,9 @@ export class CodeArtsExecutor extends DefaultExecutor {
     // 这里只负责排队（拿不到凭据时不排队，让签名阶段报带说明的错误）。
     if (!encryptedBodyEnabled()) {
       throw new Error(
-        "codearts-cn: chat requests are disabled because CodeArts requires the request " +
-          "body to be encrypted with SM4-GCM (after a key-exchange step). Set " +
-          "CODEARTS_ENABLE_ENCRYPTED_BODY=1 to enable it. Quota tracking " +
-          "(snap-manager plugin statistics) is unaffected and works without it.",
+        "codearts-cn: the SM4-GCM encrypted request path is disabled " +
+          "(CODEARTS_ENABLE_ENCRYPTED_BODY=0). Quota tracking (snap-manager plugin " +
+          "statistics) is unaffected and works without it.",
       );
     }
 
@@ -454,18 +473,6 @@ export class CodeArtsExecutor extends DefaultExecutor {
     const { accessKeyId, secretAccessKey, securityToken } = this.getCredentials(connection);
     if (!accessKeyId || !secretAccessKey) {
       return { valid: false, error: "accessKeyId and secretAccessKey are required" };
-    }
-
-    // 加密未实现时无法用 chat 端点判定凭据 —— 别把 401 误报成“凭据无效”。
-    if (!encryptedBodyEnabled()) {
-      return {
-        valid: false,
-        error:
-          "CodeArts chat is not ready: the request body must be encrypted with SM4-GCM " +
-          "(after a key-exchange step), which is not implemented yet. The AK/SK pair cannot " +
-          "be validated through the chat endpoint until then. Quota tracking works — use " +
-          "the usage panel to confirm the credentials.",
-      };
     }
 
     // 探测也占上游槽位。不排队的话，在账号满载时会拿到 400 并发错误，

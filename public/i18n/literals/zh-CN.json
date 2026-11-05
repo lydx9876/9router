@@ -1415,5 +1415,22 @@
   "Singapore": "新加坡",
   "Europe · Amsterdam": "欧洲 · 阿姆斯特丹",
   "Russia": "俄罗斯",
-  "India": "印度"
+  "India": "印度",
+  "Rerank": "重排序",
+  "Manage your Rerank providers": "管理您的重排序提供商",
+  "Add Custom Rerank": "添加自定义重排序",
+  "Edit Custom Rerank": "编辑自定义重排序",
+  "Custom Rerank": "自定义重排序",
+  "Query": "查询",
+  "Documents": "文档",
+  "Top N": "Top N",
+  "Rerank (rerank)": "重排序 (rerank)",
+  "LLM (chat completions)": "LLM (chat completions)",
+  "Embedding (embeddings)": "嵌入 (embeddings)",
+  "Speech to Text (transcriptions)": "语音转文本 (transcriptions)",
+  "Model Type": "模型类型",
+  "Decides which endpoint the model is tested against and where it appears in the UI.": "决定测试模型时使用的端点，以及模型在界面中的归属。",
+  "Add rerank models manually or import them from the /models endpoint.": "手动添加重排序模型，或从 /models 端点导入。",
+  "document": "个文档",
+  "documents": "个文档"
 }

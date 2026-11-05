@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { Card } from "@/shared/components";
 import { getProviderAlias, isCustomRerankProvider } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { translate } from "@/i18n/runtime";
 import { Row } from "./exampleShared";
 
 const DEFAULT_RESPONSE_EXAMPLE = `{
@@ -182,7 +183,9 @@ export function RerankExampleCard({ providerId, customAlias }) {
             placeholder="One document per line"
             className="w-full px-3 py-1.5 text-sm border border-border rounded-lg bg-background focus:outline-none focus:border-primary font-mono resize-y"
           />
-          <span className="text-xs text-text-muted">{docList.length} document{docList.length === 1 ? "" : "s"}</span>
+          <span className="text-xs text-text-muted">
+            {`${docList.length} ${translate(docList.length === 1 ? "document" : "documents")}`}
+          </span>
         </Row>
 
         {/* top_n */}

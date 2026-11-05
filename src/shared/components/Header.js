@@ -25,13 +25,17 @@ const getPageInfo = (pathname) => {
     const providerId = mediaDetailMatch[2];
     const kindConfig = MEDIA_PROVIDER_KINDS.find((k) => k.id === kindId);
     const provider = AI_PROVIDERS[providerId];
+    // Custom nodes (custom-rerank-*, custom-embedding-*) are not in AI_PROVIDERS,
+    // so the title would show the raw node id. Their name lives in the node table;
+    // the caller already has it, so fall back to the id only when nothing is known.
+    const displayName = provider?.name || providerId;
     return {
-      title: provider?.name || providerId,
+      title: displayName,
       description: "",
       breadcrumbs: [
         { label: "Media Providers", href: `/dashboard/media-providers/${kindId}` },
         { label: kindConfig?.label || kindId, href: `/dashboard/media-providers/${kindId}` },
-        { label: provider?.name || providerId, image: getProviderIconSrc(providerId) },
+        { label: displayName, image: getProviderIconSrc(providerId) },
       ],
     };
   }
@@ -184,13 +188,36 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
   const [displayName, setDisplayName] = useState("");
   const [loginMethod, setLoginMethod] = useState("");
   const [donateOpen, setDonateOpen] = useState(false);
+  // Custom nodes are not in AI_PROVIDERS, so their name has to be fetched.
+  const [nodeName, setNodeName] = useState("");
 
   // Memoize page info to prevent unnecessary recalculations
   const pageInfo = useMemo(() => getPageInfo(pathname), [pathname]);
   const { title, description, icon, breadcrumbs } = pageInfo;
+  // Custom nodes (custom-rerank-*) are not in AI_PROVIDERS; use the fetched
+  // node name so the header shows "Gitee Rerank" instead of the raw node id.
+  const isCustomNodeRoute = Boolean(pathname?.match(/\/media-providers\/([^/]+)\/([^/]+)$/));
+  const displayTitle = isCustomNodeRoute && nodeName ? nodeName : title;
+  const displayBreadcrumbs = isCustomNodeRoute && nodeName
+    ? breadcrumbs.map((b, i) => (i === breadcrumbs.length - 1 ? { ...b, label: nodeName } : b))
+    : breadcrumbs;
 
   useEffect(() => {
     let cancelled = false;
+
+    async function loadNodeName() {
+      const match = pathname?.match(/\/media-providers\/([^/]+)\/([^/]+)$/);
+      if (!match) { setNodeName(""); return; }
+      try {
+        const res = await fetch("/api/provider-nodes", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        const node = (data.nodes || []).find((n) => n.id === match[2]);
+        if (!cancelled) setNodeName(node?.name || "");
+      } catch {
+        if (!cancelled) setNodeName("");
+      }
+    }
 
     async function loadAuthStatus() {
       try {
@@ -210,10 +237,11 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
     }
 
     loadAuthStatus();
+    loadNodeName();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [pathname]);
 
   const handleLogout = async () => {
     try {
@@ -244,7 +272,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
       <div className="flex flex-col min-w-0 flex-1">
         {breadcrumbs.length > 0 ? (
           <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-            {breadcrumbs.map((crumb, index) => (
+            {displayBreadcrumbs.map((crumb, index) => (
               <div
                 key={`${crumb.label}-${crumb.href || "current"}`}
                 className={`items-center gap-1.5 sm:gap-2 min-w-0 ${
@@ -282,7 +310,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
               </div>
             ))}
           </div>
-        ) : title ? (
+        ) : displayTitle ? (
           <div>
             <div className="flex items-center gap-2">
               {icon && (
@@ -291,7 +319,7 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
                 </span>
               )}
               <h1 className="text-base lg:text-2xl font-semibold tracking-tight truncate">
-                {translate(title)}
+                {translate(displayTitle)}
               </h1>
             </div>
             {description && (

@@ -27,7 +27,20 @@ export function getDataDir() {
     return configured;
   } catch (e) {
     if (e?.code === "EACCES" || e?.code === "EPERM") {
-      console.warn(`[DATA_DIR] '${configured}' not writable → fallback ~/.${APP_NAME}`);
+      // Silently falling back is how the Docker data loss happens: the image
+      // sets DATA_DIR=/app/data (the mounted volume), an --env-file overrides
+      // it with a path the unprivileged `node` user cannot create, and the
+      // database then lands in the home directory where no mount covers it.
+      // The container is recreated on every update and the settings are gone.
+      console.warn(
+        `[DATA_DIR] '${configured}' not writable → fallback ~/.${APP_NAME}`,
+      );
+      console.warn(
+        `[DATA_DIR] WARNING: the database will be written to ${defaultDir()}, ` +
+          "which is probably NOT the path you mounted a volume on. In Docker, " +
+          "pass -e DATA_DIR=/app/data (matching the -v mount) so the data " +
+          "survives a container replacement.",
+      );
       return defaultDir();
     }
     throw e;

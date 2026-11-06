@@ -1294,6 +1294,13 @@ docker run -d \
   decolua/9router:latest
 ```
 
+> ⚠️ **`DATA_DIR` must match the mounted path.** The image sets `DATA_DIR=/app/data`,
+> but `--env-file` overrides it. If `.env` names a different path that the
+> unprivileged `node` user cannot create, the app falls back to `~/.9router` and
+> writes the database to `/home/node/.9router/` — which no mount covers, so the
+> data disappears with the container. Pass `-e DATA_DIR=/app/data` explicitly to
+> pin it regardless of what `.env` says.
+
 → Open http://localhost:20128
 
 **Build from source (dev):**

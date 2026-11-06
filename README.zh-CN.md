@@ -1060,9 +1060,9 @@ docker run -d \
   --name 9router \
   -p 20128:20128 \
   --env-file /root/dev/9router/.env \
-  -v 9router-data:/app/data \
-  -v 9router-usage:/root/.9router \
-  9router
+  -e DATA_DIR=/app/data \
+  -v /root/dev/9router/data:/app/data \
+  decolua/9router:latest
 ```
 
 便携命令（如果你已经在仓库根目录）：
@@ -1072,10 +1072,18 @@ docker run -d \
   --name 9router \
   -p 20128:20128 \
   --env-file ./.env \
-  -v 9router-data:/app/data \
-  -v 9router-usage:/root/.9router \
-  9router
+  -e DATA_DIR=/app/data \
+  -v "$PWD/data:/app/data" \
+  decolua/9router:latest
 ```
+
+> ⚠️ **`DATA_DIR` 必须和挂载路径一致。** 镜像里 `DATA_DIR=/app/data`，但 `--env-file`
+> 会覆盖它。如果 `.env` 里写的是别的路径（比如 `/var/lib/9router`），而那个目录
+> 对容器内的 `node` 用户不可写，程序会**回退到 `~/.9router`** 并把数据库写到
+> `/home/node/.9router/` —— 那里没有任何挂载，容器一删配置就没了。
+>
+> 用上面的 `-e DATA_DIR=/app/data` 可以强制对齐，不受 `.env` 影响。
+> 不要再挂 `/root/.9router`：那会遮蔽镜像里的符号链接，反而让两处路径分家。
 
 容器默认值：
 - `PORT=20128`
@@ -1095,7 +1103,7 @@ docker stop 9router && docker rm 9router
 |----------|---------|-------------|
 | `JWT_SECRET` | 自动生成（`~/.9router/jwt-secret`） | 用于控制面板 auth cookie 的 JWT 签名密钥（设置可在多实例间共享） |
 | `INITIAL_PASSWORD` | `123456` | 当没有保存的哈希时首次登录的密码 |
-| `DATA_DIR` | `~/.9router` | 主应用数据库位置（`db.json`） |
+| `DATA_DIR` | `~/.9router` | 主应用数据库位置（`db/data.sqlite`）。Docker 中必须设为挂载的路径（`/app/data`），否则数据会落在容器内、随容器删除而丢失 |
 | `PORT` | 框架默认值 | 服务端口（示例中为 `20128`） |
 | `HOSTNAME` | 框架默认值 | 绑定主机（Docker 默认为 `0.0.0.0`） |
 | `NODE_ENV` | 运行时默认值 | 设置 `production` 用于部署 |
@@ -1121,7 +1129,8 @@ docker stop 9router && docker rm 9router
 - 主应用状态：`${DATA_DIR}/db.json`（提供商、组合、别名、密钥、设置），由 `src/lib/localDb.js` 管理。
 - 使用历史和日志：`${DATA_DIR}/usage.json` 和 `${DATA_DIR}/log.txt`，由 `src/lib/usageDb.js` 管理。
 - 可选的请求/翻译器日志：`ENABLE_REQUEST_LOGS=true` 时位于 `<repo>/logs/...`。
-- `${DATA_DIR}` 和 `~/.9router` 在 Docker 容器中解析到同一位置 — 符号链接 `/root/.9router -> /app/data` 在构建时创建。
+- `${DATA_DIR}` 和 `~/.9router` 在 Docker 容器中解析到同一位置 — 符号链接 `/root/.9router -> /app/data-home` 在构建时创建。
+- 容器以 `node` 用户运行，其 home 是 `/home/node`。若 `DATA_DIR` 不可写，程序会回退到 `/home/node/.9router` —— **该路径没有挂载**，容器删除后配置即丢失。启动时用 `-e DATA_DIR=/app/data` 显式指定可避免。
 
 </details>
 

@@ -407,7 +407,8 @@ docker run -d \
   -p 20128:20128 \
   -e JWT_SECRET="your-secure-secret" \
   -e INITIAL_PASSWORD="your-password" \
-  -v 9router-data:/root/.9router \
+  -e DATA_DIR=/app/data \
+  -v 9router-data:/app/data \
   --name 9router \
   9router/9router:latest
 ```

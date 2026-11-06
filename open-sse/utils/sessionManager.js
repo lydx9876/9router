@@ -86,6 +86,9 @@ export function clearSessionStore() {
 
 // Conversation-stable session store: Key = hash(scope+assistant text), Value = { sessionId, lastUsed }
 const assistantSessionStore = new Map();
+// Same idea, but keyed on the conversation's first user message — stable from
+// the very first turn, unlike the assistant-text hash.
+const firstUserSessionStore = new Map();
 const ASSISTANT_MIN_LEN = 50;
 const ASSISTANT_CAP_LEN = 50;
 const MAX_ASSISTANT_SESSIONS = 5000;
@@ -135,6 +138,66 @@ function extractAntigravitySession(body) {
     return m ? normalizeSessionId(m[1]) : null;
 }
 
+/**
+ * Scopes that must NOT treat `x-client-request-id` as a session identifier.
+ *
+ * CodeArts Doer limits each account to 3 *live* upstream sessions, and the
+ * limit counts distinct session ids rather than in-flight requests. A client
+ * that sends a fresh `x-client-request-id` per request (the default for most
+ * HTTP libraries) would therefore open a new upstream session on every call —
+ * the 4th request then waits for the upstream to recycle a slot, which takes
+ * 40–45 seconds. Ignoring the one-shot request id keeps one conversation on
+ * one upstream session, so the requests of a single conversation no longer
+ * queue behind each other.
+ */
+const SCOPES_IGNORING_CLIENT_REQUEST_ID = new Set(["codearts-cn"]);
+
+/**
+ * Scopes whose session id is derived from the conversation's first user
+ * message instead of the accumulated assistant text.
+ *
+ * The assistant-text hash changes whenever the first reply is shorter than
+ * ASSISTANT_MIN_LEN: the first turn falls back to the per-connection id and the
+ * second turn switches to the hash, so one conversation briefly occupies two
+ * upstream sessions. Hashing the first user message is stable from turn one —
+ * the user does not rewrite their opening question.
+ */
+const SCOPES_KEYED_ON_FIRST_USER_MESSAGE = new Set(["codearts-cn"]);
+
+function firstUserMessageText(body) {
+    const items = requestMessages(body);
+    if (!items) return "";
+    for (const item of items) {
+        if (item?.role !== "user") continue;
+        if (typeof item.content === "string") return item.content;
+        if (Array.isArray(item.content)) {
+            const text = item.content
+                .map((c) => (typeof c === "string" ? c : c?.text || c?.content || ""))
+                .join("");
+            if (text) return text;
+        }
+    }
+    return "";
+}
+
+// Stable session id keyed on the first user message of the conversation.
+function firstUserMessageSessionId(scope, body) {
+    const text = firstUserMessageText(body);
+    if (!text) return null;
+    const hash = sha16(`${scope}:${text.slice(0, ASSISTANT_CAP_LEN)}`);
+    const existing = firstUserSessionStore.get(hash);
+    if (existing) {
+        existing.lastUsed = Date.now();
+        return existing.sessionId;
+    }
+    if (firstUserSessionStore.size >= MAX_ASSISTANT_SESSIONS) {
+        firstUserSessionStore.delete(firstUserSessionStore.keys().next().values().next().value);
+    }
+    const sessionId = generateBinaryStyleId();
+    firstUserSessionStore.set(hash, { sessionId, lastUsed: Date.now() });
+    return sessionId;
+}
+
 function extractClientSessionId(headers, body, scope = "") {
     // Claude Code sends the session in a header AND in metadata.user_id; the header
     // survives translation to formats that drop metadata (e.g. Responses API).
@@ -147,13 +210,14 @@ function extractClientSessionId(headers, body, scope = "") {
         const v = headerValue(headers, key);
         if (v) return v;
     }
-    const requestId = scope === "kiro" ? null : headerValue(headers, "x-client-request-id");
+    const ignoreClientRequestId = scope === "kiro" || SCOPES_IGNORING_CLIENT_REQUEST_ID.has(scope);
+    const requestId = ignoreClientRequestId ? null : headerValue(headers, "x-client-request-id");
     if (requestId) return requestId;
     const fromBody =
         normalizeSessionId(body?.prompt_cache_key) ||
         normalizeSessionId(body?.session_id) ||
         normalizeSessionId(body?.conversation_id) ||
-        (scope === "kiro" ? null : normalizeSessionId(body?.metadata?.user_id));
+        (ignoreClientRequestId ? null : normalizeSessionId(body?.metadata?.user_id));
     return fromBody || null;
 }
 
@@ -212,6 +276,14 @@ function assistantTextSessionId(scope, body) {
 export function resolveSessionIdentity({ headers, body, connectionId, workspaceId, scope = "" } = {}) {
     const client = extractClientSessionId(headers, body, scope);
     if (client) return { sessionId: client, ephemeral: false };
+    if (SCOPES_KEYED_ON_FIRST_USER_MESSAGE.has(scope)) {
+        // The first user message identifies the conversation from turn one and
+        // never changes, so a conversation keeps one upstream session for its
+        // whole life — no slot juggling, no 40-second waits.
+        const fromFirstUser = firstUserMessageSessionId(`${scope}:${connectionId || ""}`, body);
+        if (fromFirstUser) return { sessionId: fromFirstUser, ephemeral: false };
+        return { sessionId: deriveSessionId(connectionId), ephemeral: false };
+    }
     const fromAssistant = scope === "kiro" ? null : assistantTextSessionId(`${scope}:${connectionId || ""}`, body);
     if (fromAssistant) return { sessionId: fromAssistant, ephemeral: false };
     const ws = normalizeSessionId(workspaceId);

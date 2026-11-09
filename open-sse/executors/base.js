@@ -181,12 +181,8 @@ export class BaseExecutor {
         const finalHeaders = outgoing.headers;
         const finalBody = outgoing.body;
         const fetchT0 = Date.now();
-<<<<<<< HEAD
         dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${finalBody.length}B | connectTimeout=${timeoutMs}ms`);
         // 上游：被上游边缘节点静默丢弃的 keep-alive socket 需要强制换新连接
-=======
-        dbg("FETCH", `${this.provider.toUpperCase()} → ${url} | body=${bodyStr.length}B | connectTimeout=${timeoutMs}ms`);
->>>>>>> 963787f7 (fix(proxyFetch): stop reusing dead keep-alive sockets upstream edges drop silently)
         const effectiveProxyOptions = forceFreshSocketByUrl[urlIndex]
           ? { ...(proxyOptions || {}), forceFreshSocket: true }
           : proxyOptions;

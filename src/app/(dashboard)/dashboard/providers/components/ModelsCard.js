@@ -6,10 +6,19 @@ import { Card, Button, Modal } from "@/shared/components";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
 import { getProviderAlias } from "@/shared/constants/providers";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { modelTestStatus, modelTestMessage } from "@/shared/utils/modelTestStatus";
 
 // ── ModelRow ───────────────────────────────────────────────────
 export function ModelRow({ model, fullModel, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting }) {
-  const borderColor = testStatus === "ok" ? "border-green-500/40" : testStatus === "error" ? "border-red-500/40" : "border-border";
+  // "queued" is not a failure: the credential is fine, the model just has no capacity
+  // at this moment (qoder answers code 10605 / "Queue wait timed out").
+  const borderColor = testStatus === "ok"
+    ? "border-green-500/40"
+    : testStatus === "queued"
+    ? "border-amber-500/40"
+    : testStatus === "error"
+    ? "border-red-500/40"
+    : "border-border";
   const iconColor = testStatus === "ok" ? "#22c55e" : testStatus === "error" ? "#ef4444" : undefined;
 
   return (
@@ -133,6 +142,8 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
     } catch (e) { console.log("ModelsCard fetch error:", e); }
   }, []);
 
+  // fetchData is async; the rule's synchronous-setState concern does not apply here.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleSetAlias = async (modelId, alias) => {
@@ -189,8 +200,8 @@ export default function ModelsCard({ providerId, kindFilter, providerAliasOverri
         body: JSON.stringify({ model: `${providerAlias}/${modelId}`, kind: kindFilter }),
       });
       const data = await res.json();
-      setModelTestResults((prev) => ({ ...prev, [modelId]: data.ok ? "ok" : "error" }));
-      setTestError(data.ok ? "" : (data.error || "Model not reachable"));
+      setModelTestResults((prev) => ({ ...prev, [modelId]: modelTestStatus(data) }));
+      setTestError(modelTestMessage(data));
     } catch {
       setModelTestResults((prev) => ({ ...prev, [modelId]: "error" }));
       setTestError("Network error");

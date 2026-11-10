@@ -39,6 +39,10 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
         const newLevel = Math.min(backoffLevel + 1, BACKOFF_CONFIG.maxLevel);
         return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel };
       }
+      // A rule can declare a transient upstream condition that is not the
+      // credential's fault (e.g. qoder's model queue). It must not cool the
+      // account down, but combo rotation should still advance to the next member.
+      if (rule.requestScoped) return { shouldFallback: false, cooldownMs: 0, requestScoped: true };
       return { shouldFallback: true, cooldownMs: rule.cooldownMs };
     }
 
@@ -48,6 +52,7 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
         const newLevel = Math.min(backoffLevel + 1, BACKOFF_CONFIG.maxLevel);
         return { shouldFallback: true, cooldownMs: getQuotaCooldown(newLevel), newBackoffLevel: newLevel };
       }
+      if (rule.requestScoped) return { shouldFallback: false, cooldownMs: 0, requestScoped: true };
       return { shouldFallback: true, cooldownMs: rule.cooldownMs };
     }
   }

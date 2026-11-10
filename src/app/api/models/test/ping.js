@@ -6,6 +6,51 @@ import { getConsistentMachineId } from "@/shared/utils/machineId";
 
 const CLI_TOKEN_SALT = "9r-cli-auth";
 
+// Probe budget. One fixed short cap, deliberately.
+//
+// A provider whose response says "model queued, retry in Ns" is working — it just has
+// no capacity for that model yet. It is tempting to raise the probe budget so the queue
+// can drain, but measured on qoder-cn/qoder: the queue holds for minutes and the models
+// are polled per account, so a 240s budget made a 14-model sweep take 662s end to end
+// while still failing every queued model. A probe answers "can this model serve a
+// request *now*", not "will it serve one eventually" — so keep it short and label the
+// queued state instead of waiting it out (see QUEUE_MARKER below).
+const PROBE_TIMEOUT_MS = 15_000;
+
+// Upstream signal for "no capacity right now", matched case-insensitively in the
+// error body. Qoder answers either the queue envelope (code 10605 / isQueued) or, once
+// it gives up waiting, `{"code":"504","message":"Queue wait timed out"}`.
+const QUEUED_PROVIDERS = new Set(["qoder", "qoder-cn"]);
+const QUEUE_MARKERS = ["isqueued", "queue wait timed out", "queue type", "10605"];
+
+function isQueuedResult(model, errorText) {
+  const provider = resolveProviderId(String(model).split("/")[0]);
+  if (!QUEUED_PROVIDERS.has(provider)) return false;
+  const text = String(errorText || "").toLowerCase();
+  return QUEUE_MARKERS.some((marker) => text.includes(marker));
+}
+
+/**
+ * Turn a thrown transport failure into a per-model result.
+ *
+ * `fetch` rejects for DNS failures, refused connections and aborted signals — none of
+ * which are provider responses, so there is no status to report. Callers render these
+ * the same way as an upstream error, but a thrown exception used to escape this module
+ * entirely and take down the caller's whole batch.
+ */
+function transportFailure(err, latencyMs) {
+  const cause = err?.cause;
+  const code = cause?.code || err?.code;
+  const detail = code ? `${err?.name || "Error"}: ${code}` : `${err?.name || "Error"}: ${err?.message || err}`;
+  const timedOut = err?.name === "TimeoutError" || code === "UND_ERR_CONNECT_TIMEOUT";
+  return {
+    ok: false,
+    latencyMs,
+    status: 0,
+    error: timedOut ? `Probe timed out: ${detail}` : detail,
+  };
+}
+
 function createSilentWavFile() {
   const sampleRate = 16000;
   const channels = 1;
@@ -56,15 +101,36 @@ async function getInternalHeaders() {
 }
 
 export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:${process.env.PORT || UPDATER_CONFIG.appPort}`) {
-  const headers = await getInternalHeaders();
   const start = Date.now();
+  let result;
+  try {
+    result = await probeModelByKind(model, kind, baseUrl, start);
+  } catch (err) {
+    // A probe must always answer per model. `fetch` rejects on DNS failure, refused
+    // connections and aborts; letting that escape took down the caller's whole batch
+    // (the dashboard reported only "Test failed" with no indication of which model).
+    result = transportFailure(err, Date.now() - start);
+  }
+  // A queued model is not a broken connection: surface it as its own state so the
+  // dashboard can say "no capacity now" instead of "failed". The verdict is derived
+  // from the upstream error text, so it works for every kind without each branch
+  // having to repeat the classification.
+  if (!result.ok && isQueuedResult(model, result.error)) {
+    return { ...result, queued: true, error: `Queued upstream (no capacity right now): ${result.error}` };
+  }
+  return result;
+}
+
+async function probeModelByKind(model, kind, baseUrl, start) {
+  const headers = await getInternalHeaders();
+  const timeout = PROBE_TIMEOUT_MS;
 
   if (kind === "embedding") {
     const res = await fetch(`${baseUrl}/api/v1/embeddings`, {
       method: "POST",
       headers,
       body: JSON.stringify({ model, input: "test" }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeout),
     });
     const latencyMs = Date.now() - start;
     const rawText = await res.text().catch(() => "");
@@ -91,7 +157,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
         query: "test",
         documents: ["test", "test2"],
       }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeout),
     });
     const latencyMs = Date.now() - start;
     const rawText = await res.text().catch(() => "");
@@ -114,7 +180,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
       method: "POST",
       headers,
       body: JSON.stringify({ model, prompt: "test" }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeout),
     });
     const latencyMs = Date.now() - start;
     const rawText = await res.text().catch(() => "");
@@ -143,7 +209,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
       method: "POST",
       headers: Object.fromEntries(Object.entries(headers).filter(([key]) => key.toLowerCase() !== "content-type")),
       body: form,
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeout),
     });
     const latencyMs = Date.now() - start;
     const rawText = await res.text().catch(() => "");
@@ -173,7 +239,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
           probe: { type: "noul", instructions: "Is the customer reporting a billing problem?" },
         },
       }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(timeout),
     });
     const latencyMs = Date.now() - start;
     const rawText = await res.text().catch(() => "");
@@ -205,7 +271,7 @@ export async function pingModelByKind(model, kind, baseUrl = `http://127.0.0.1:$
       stream: false,
       messages: [{ role: "user", content: "hi" }],
     }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeout),
   });
   const latencyMs = Date.now() - start;
 

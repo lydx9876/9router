@@ -5,12 +5,35 @@ import { isOpenAICompatibleProvider, isAnthropicCompatibleProvider } from "@/sha
 import { UPDATER_CONFIG } from "@/shared/constants/config";
 import { pingModelByKind } from "@/app/api/models/test/ping";
 
+// Probes are fired one model at a time. A provider that reports "model queued" (qoder)
+// serialises per account, so parallel probes fight for the same queue slot and every
+// one of them times out: 16 concurrent qdcn probes took 15s and failed together. A
+// small pool keeps the route responsive without manufacturing contention.
+const PROBE_CONCURRENCY = 3;
+
+async function mapWithConcurrency(items, limit, fn) {
+  const results = [];
+  for (let i = 0; i < items.length; i += 1) results.push(undefined);
+  let next = 0;
+  const runWorker = async () => {
+    for (;;) {
+      const index = next++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  const workers = [];
+  for (let i = 0; i < Math.min(limit, items.length); i += 1) workers.push(runWorker());
+  await Promise.all(workers);
+  return results;
+}
+
 /**
  * POST /api/providers/[id]/test-models
  * id = connectionId — used only to resolve provider + model list.
  * Actual requests go through the internal endpoint that matches each model kind.
  */
-export async function POST(request, { params }) {
+export async function POST(_request, { params }) {
   try {
     const { id } = await params;
     const connection = await getProviderConnectionById(id);
@@ -41,20 +64,33 @@ export async function POST(request, { params }) {
       return NextResponse.json({ error: "No models configured for this provider" }, { status: 400 });
     }
 
-    // Warm up with first model to trigger token refresh (if needed) before parallel calls.
-    // This prevents race condition where multiple requests concurrently refresh the same token.
+    // Warm up with the first model to trigger token refresh (if needed) before the
+    // pooled probes start. This prevents a race where several probes concurrently
+    // refresh the same token.
     const [first, ...rest] = models;
     const firstKind = first.kind || first.type || "llm";
     const firstResult = await pingModelByKind(`${alias}/${first.id}`, firstKind, baseUrl);
     const results = [{ modelId: first.id, name: first.name || first.id, ...firstResult }];
 
     if (rest.length > 0) {
-      const restResults = await Promise.all(
-        rest.map(async (model) => {
-          const result = await pingModelByKind(`${alias}/${model.id}`, model.kind || model.type || "llm", baseUrl);
+      // Ping returns a result object for every outcome (including transport failures),
+      // but keep a guard so one unexpected throw can never erase the other results.
+      const restResults = await mapWithConcurrency(rest, PROBE_CONCURRENCY, async (model) => {
+        const kind = model.kind || model.type || "llm";
+        try {
+          const result = await pingModelByKind(`${alias}/${model.id}`, kind, baseUrl);
           return { modelId: model.id, name: model.name || model.id, ...result };
-        })
-      );
+        } catch (err) {
+          return {
+            modelId: model.id,
+            name: model.name || model.id,
+            ok: false,
+            latencyMs: 0,
+            status: 0,
+            error: err?.message || String(err),
+          };
+        }
+      });
       results.push(...restResults);
     }
 

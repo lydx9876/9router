@@ -3,14 +3,22 @@ import { CapacityBadges } from "@/shared/components";
 
 export default function ModelRow({ model, fullModel, alias, copied, onCopy, testStatus, isCustom, isFree, onDeleteAlias, onTest, isTesting, onDisable, caps, thinkingSuffix }) {
   const displayModel = thinkingSuffix ? `${fullModel}(${thinkingSuffix})` : fullModel;
+  // "queued" is not a failure: the credential is fine, the model just has no
+  // capacity at this moment (qoder answers code 10605 / "Queue wait timed out").
+  // Without its own state a queued model rendered as a red failure, which made a
+  // healthy account look broken.
   const borderColor = testStatus === "ok"
     ? "border-green-500/40"
+    : testStatus === "queued"
+    ? "border-amber-500/40"
     : testStatus === "error"
     ? "border-red-500/40"
     : "border-border";
 
   const iconColor = testStatus === "ok"
     ? "#22c55e"
+    : testStatus === "queued"
+    ? "#f59e0b"
     : testStatus === "error"
     ? "#ef4444"
     : undefined;
@@ -22,7 +30,13 @@ export default function ModelRow({ model, fullModel, alias, copied, onCopy, test
           className="material-symbols-outlined shrink-0 text-base mt-0.5 sm:mt-0"
           style={iconColor ? { color: iconColor } : undefined}
         >
-          {testStatus === "ok" ? "check_circle" : testStatus === "error" ? "cancel" : "smart_toy"}
+          {testStatus === "ok"
+            ? "check_circle"
+            : testStatus === "queued"
+            ? "hourglass_empty"
+            : testStatus === "error"
+            ? "cancel"
+            : "smart_toy"}
         </span>
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <code className="w-fit max-w-full break-all rounded bg-sidebar px-1.5 py-0.5 font-mono text-xs text-text-muted sm:max-w-[360px] sm:truncate">{displayModel}</code>
@@ -92,7 +106,7 @@ ModelRow.propTypes = {
   alias: PropTypes.string,
   copied: PropTypes.string,
   onCopy: PropTypes.func.isRequired,
-  testStatus: PropTypes.oneOf(["ok", "error"]),
+  testStatus: PropTypes.oneOf(["ok", "queued", "error"]),
   isCustom: PropTypes.bool,
   isFree: PropTypes.bool,
   onDeleteAlias: PropTypes.func,

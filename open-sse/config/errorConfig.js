@@ -58,6 +58,16 @@ const COOLDOWN = {
  */
 export const ERROR_RULES = [
   // --- Text-based rules (checked first, order = priority) ---
+  // Qoder model-queue throttle: the model is momentarily out of capacity and the
+  // identical request succeeds once the queue drains (observed: queued ~140s, then
+  // served). It says nothing about the credential, so it must not cool the account
+  // down or write modelLock_*. Before this rule it fell through to the default
+  // transient cooldown, and one "test this model" click left testStatus:"unavailable"
+  // plus a model lock behind — the dashboard then reported a healthy account as down.
+  { provider: "qoder-cn", text: "queue wait timed out", requestScoped: true },
+  { provider: "qoder", text: "queue wait timed out", requestScoped: true },
+  { provider: "qoder-cn", text: "isqueued", requestScoped: true },
+  { provider: "qoder", text: "isqueued", requestScoped: true },
   { provider: "codex", text: "model is not supported when using codex with a chatgpt account", cooldownMs: MAX_RATE_LIMIT_COOLDOWN_MS },
   // Intl gateway blocks affect the account/IP, so let the connection back off.
   { provider: "codebuddy-intl", text: "request illegal", backoff: true },

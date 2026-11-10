@@ -25,23 +25,24 @@ export default {
       url: "https://openapi.qoder.sh/api/v2/quota/usage",
     },
   },
+  // Mirrors what `GET /algo/api/v2/model/list` returns for a live intl account
+  // (verified 2026-11-10). The intl and CN catalogs are NOT identical: intl
+  // publishes `ultimate`/`efficient`, CN publishes `jmodel`, and the tier
+  // aliases `performance`/`lite`/`qmodel_latest`/`qmodel` appear in neither —
+  // they only ever produced `model_config for "X" not yet known`.
   models: [
-    { id: "ultimate", name: "Ultimate" },
     { id: "auto", name: "Auto" },
-    { id: "performance", name: "Performance" },
+    { id: "ultimate", name: "Ultimate" },
     { id: "efficient", name: "Efficient" },
-    { id: "lite", name: "Lite" },
     { id: "qmodel_38max", name: "Qwen3.8-Max" },
-    { id: "qmodel_latest", name: "Qwen3.7-Max" },
-    { id: "qmodel", name: "Qwen3.7-Plus" },
     { id: "qfmodel", name: "Qwen3.8-Flash" },
-    { id: "kmodel_latest", name: "Kimi-K3" },
-    { id: "kmodel", name: "Kimi-K2.7-Code" },
+    { id: "kmodel_latest", name: "Kimi-K3.1-Pro" },
+    { id: "kmodel", name: "Kimi-K2.8-Preview" },
     { id: "gmodel", name: "GLM-5.3" },
     { id: "gfmodel", name: "GLM-5.3-Flash" },
     { id: "dmodel", name: "DeepSeek-V4-Pro" },
-    { id: "dfmodel", name: "DeepSeek-V4-Flash" },
-    { id: "mmodel", name: "MiniMax-M3" },
+    { id: "dfmodel", name: "DeepSeek-Flash" },
+    { id: "mmodel", name: "MiniMax-M3.1-Flash" },
     // Frontier reasoning pair. Absent from many per-account catalogs, so the
     // executor falls back to a static model_config (see constants.js).
     { id: "smodel", name: "Sonus" },

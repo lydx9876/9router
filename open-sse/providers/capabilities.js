@@ -455,11 +455,16 @@ PROVIDER_CAPABILITIES["qoder"] = {
   // on the default window rather than guessing.
   "auto":         { contextWindow: 200000, maxOutput: 32768 },
   "efficient":    { contextWindow: 200000, maxOutput: 32768 },
+  // `lite` and `performance` are not in any live catalog but clients still send
+  // them (older docs, stale configs); keep the rows so they fall back to a
+  // text-only window instead of the generic pattern table.
   "lite":         { contextWindow: 200000, maxOutput: 32768 },
   // Concrete ids read images back, so they are vision-capable.
   "ultimate":     { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
   "performance":  { vision: true, contextWindow: 200000, maxOutput: 65536 },
   "qmodel_38max": { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
+  // `qmodel_latest` / `qmodel` are absent from every live catalog but remain
+  // routable through the executor's catalog lookup if an account publishes them.
   "qmodel_latest":{ vision: true, contextWindow: 200000, maxOutput: 65536 },
   "qmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
   "qfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
@@ -470,6 +475,8 @@ PROVIDER_CAPABILITIES["qoder"] = {
   "dmodel":       { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
   "dfmodel":      { vision: true, reasoning: true, contextWindow: 200000, maxOutput: 65536 },
   "mmodel":       { vision: true, contextWindow: 200000, maxOutput: 65536 },
+  // CN-only: Step-5-Preview. Absent from the intl catalog.
+  "jmodel":       { vision: true, reasoning: true, contextWindow: 1000000, maxOutput: 65536 },
   // Frontier reasoning pair; absent from many per-account catalogs, so they are
   // routed through a static model_config (see shared/qoder/constants.js).
   "smodel":       { vision: true, reasoning: true, contextWindow: 180000, maxOutput: 65536 },

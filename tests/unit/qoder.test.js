@@ -42,8 +42,20 @@ describe("QODER_MODEL_MAP", () => {
     expect(QODER_MODEL_MAP.qmodel_latest).toBe("qmodel_latest");
   });
 
-  it("exposes Qoder's latest model in the static provider catalog", () => {
-    expect(PROVIDER_MODELS.qd.some((model) => model.id === "qmodel_latest")).toBe(true);
+  it("advertises the model keys a live account actually serves", () => {
+    // The static catalog is the fallback when the live /models fetch fails, so it
+    // must not list keys the gateway refuses. `qmodel_latest` (and `qmodel`,
+    // `lite`, `performance`) appear in no live catalog: probing them returns
+    // `model_config for "X" not yet known`, which is what made the dashboard's
+    // per-model test look broken. QODER_MODEL_MAP keeps the key for clients that
+    // send it; the registry list stays truthful to upstream.
+    const ids = PROVIDER_MODELS.qd.map((model) => model.id);
+    for (const key of ["auto", "ultimate", "efficient", "qmodel_38max", "qfmodel", "gmodel", "gfmodel", "dmodel", "dfmodel", "mmodel"]) {
+      expect(ids).toContain(key);
+    }
+    for (const stale of ["qmodel_latest", "qmodel", "lite", "performance"]) {
+      expect(ids).not.toContain(stale);
+    }
   });
 });
 

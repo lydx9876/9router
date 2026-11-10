@@ -260,9 +260,55 @@ function resolveConnectionProxyUrl(targetUrl, proxyOptions) {
 }
 
 // ISP DPI (VN → api.anthropic.com) RSTs Node's default TLS ClientHello curve
-// list; a single curve rewrites the fingerprint enough to pass. Empirically:
-// default agent = ECONNRESET 100%, X25519 = through 100%.
+// list; restricting the list to a single curve rewrites the fingerprint enough to
+// pass. Empirically: default agent = ECONNRESET 100%, X25519 = through 100%.
+//
+// But it is a *fingerprint* hack, not a better handshake: it pins Node's default
+// ~5-curve list down to one, and an edge that dropped X25519 (Gitee AI today, but
+// any CDN can) answers with a fatal `ssl/tls alert handshake failure` (alert 40)
+// instead of negotiating. So it is applied per host and only until it fails:
+// a handshake-failure code demotes the host to the default curve list for the
+// rest of the process (see noteCurveHandshakeFailure). NINEROUTER_TLS_ECDH_CURVE=off
+// disables the override entirely (also useful when an env proxy pins its own).
 const TLS_ECDH_CURVE = process.env.NINEROUTER_TLS_ECDH_CURVE || "X25519";
+const CURVE_OVERRIDE_DISABLED = /^(off|none|default|auto|)$/i.test(TLS_ECDH_CURVE.trim());
+
+// Hosts whose handshake rejected the pinned curve list — keyed by hostname, so one
+// bad edge does not cost every other provider a failed request. Bounded like the
+// dispatcher caches; entries are stable facts about an edge, not per-request state.
+const curveDemotedHosts = new Set();
+const CURVE_DEMOTED_HOSTS_MAX_SIZE = 200;
+
+function noteCurveHandshakeFailure(hostname) {
+  if (!hostname || curveDemotedHosts.has(hostname)) return;
+  if (curveDemotedHosts.size >= CURVE_DEMOTED_HOSTS_MAX_SIZE) {
+    curveDemotedHosts.delete(curveDemotedHosts.values().next().value);
+  }
+  curveDemotedHosts.add(hostname);
+  dbg("TLS", `pinned curve list rejected by ${hostname}; using the default curve list for this host`);
+}
+
+/**
+ * A handshake rejected because the client offered a curve list the edge does not
+ * accept. Distinct from a cert error (verification) and from a stale socket (replay
+ * would re-send the body): the request never left this process, so retrying is safe
+ * regardless of the body.
+ */
+function isHandshakeCurveRejection(err) {
+  const code = err?.cause?.code || err?.code || "";
+  if (code === "ERR_SSL_SSL/TLS_ALERT_HANDSHAKE_FAILURE") return true;
+  // Older/newer Node builds surface the same alert without the ERR_SSL_ prefix.
+  const msg = String(err?.cause?.message || err?.message || "");
+  return /ssl3_read_bytes|handshake failure/i.test(msg) && /alert (number )?40/i.test(msg);
+}
+
+function hostnameOf(url) {
+  try {
+    return new URL(typeof url === "string" ? url : url.url).hostname;
+  } catch {
+    return null;
+  }
+}
 
 // autoSelectFamilyAttemptTimeout = happy eyeballs (RFC 8305): race both address
 // families, fall over in 250ms — replaces the old global ipv4first flag, which fixed
@@ -270,8 +316,11 @@ const TLS_ECDH_CURVE = process.env.NINEROUTER_TLS_ECDH_CURVE || "X25519";
 // requestTls must stay TLS-options-only (undici 8 rejects connect-level options there
 // with UND_ERR_INVALID_ARG).
 const EYEBALLS_CONNECT = { autoSelectFamily: true, autoSelectFamilyAttemptTimeout: 250 };
-function buildConnectOptions(insecure) {
-  return { ...EYEBALLS_CONNECT, ecdhCurve: TLS_ECDH_CURVE, ...(insecure ? { rejectUnauthorized: false } : {}) };
+function buildConnectOptions(insecure, usePinnedCurve = true) {
+  const connect = { ...EYEBALLS_CONNECT };
+  if (usePinnedCurve && !CURVE_OVERRIDE_DISABLED) connect.ecdhCurve = TLS_ECDH_CURVE;
+  if (insecure) connect.rejectUnauthorized = false;
+  return connect;
 }
 
 function evictOldest(cacheMap) {
@@ -286,7 +335,7 @@ async function getOrCreateDirectAgent(key, insecure, keepAliveTimeout, keepAlive
   const { Agent } = await import("undici");
   evictOldest(directDispatchers);
   const agent = new Agent({
-    connect: buildConnectOptions(insecure),
+    connect: buildConnectOptions(insecure, key.includes("::pinned")),
     keepAliveTimeout,
     keepAliveMaxTimeout,
   });
@@ -298,10 +347,14 @@ async function getOrCreateDirectAgent(key, insecure, keepAliveTimeout, keepAlive
  * Shared direct dispatcher with capped keep-alive TTL. Prevents undici from
  * reusing idle sockets that upstream edges (NVIDIA NIM, Cloudflare) silently
  * dropped without sending a TCP RST.
+ *
+ * `usePinnedCurve: false` gets the default curve list, used for hosts whose edge
+ * rejected the pinned list. It is part of the cache key so both agents coexist.
  */
-export function getDirectDispatcher(insecure = false) {
+export function getDirectDispatcher(insecure = false, usePinnedCurve = true) {
   const { keepAliveTimeout, keepAliveMaxTimeout } = resolveKeepAliveTimeouts();
-  const key = `direct::${insecure ? "insecure" : "secure"}::${keepAliveTimeout}::${keepAliveMaxTimeout}`;
+  const curveKey = usePinnedCurve && !CURVE_OVERRIDE_DISABLED ? "pinned" : "default";
+  const key = `direct::${insecure ? "insecure" : "secure"}::${curveKey}::${keepAliveTimeout}::${keepAliveMaxTimeout}`;
   return getOrCreateDirectAgent(key, insecure, keepAliveTimeout, keepAliveMaxTimeout);
 }
 
@@ -309,8 +362,9 @@ export function getDirectDispatcher(insecure = false) {
  * No-keep-alive retry dispatcher (`keepAliveTimeout: 1ms`) — guarantees a fresh
  * TCP/TLS connection after a poisoned pooled socket or a connect timeout.
  */
-export function getFreshRetryDispatcher(insecure = false) {
-  const key = `fresh::${insecure ? "insecure" : "secure"}`;
+export function getFreshRetryDispatcher(insecure = false, usePinnedCurve = true) {
+  const curveKey = usePinnedCurve && !CURVE_OVERRIDE_DISABLED ? "pinned" : "default";
+  const key = `fresh::${insecure ? "insecure" : "secure"}::${curveKey}`;
   return getOrCreateDirectAgent(
     key,
     insecure,
@@ -324,23 +378,29 @@ export function getFreshRetryDispatcher(insecure = false) {
  * Always returns a dispatcher — the direct path needs the custom Agent too,
  * otherwise the default global agent's ClientHello gets RST-ed by DPI.
  */
-async function getDispatcher(proxyUrl, insecure = false, forceFreshSocket = false) {
+async function getDispatcher(proxyUrl, insecure = false, forceFreshSocket = false, usePinnedCurve = true) {
   const normalized = normalizeProxyUrl(proxyUrl);
+  const pinCurve = usePinnedCurve && !CURVE_OVERRIDE_DISABLED;
   if (!normalized) {
-    return forceFreshSocket ? getFreshRetryDispatcher(insecure) : getDirectDispatcher(insecure);
+    return forceFreshSocket
+      ? getFreshRetryDispatcher(insecure, pinCurve)
+      : getDirectDispatcher(insecure, pinCurve);
   }
 
-  const key = `${normalized}::${insecure ? "insecure" : "secure"}`;
+  const key = `${normalized}::${insecure ? "insecure" : "secure"}::${pinCurve ? "pinned" : "default"}`;
   if (!proxyDispatchers.has(key)) {
     // Evict oldest entry if max size reached
     if (proxyDispatchers.size >= MEMORY_CONFIG.proxyDispatchersMaxSize) {
       proxyDispatchers.delete(proxyDispatchers.keys().next().value);
     }
     const { ProxyAgent } = await import("undici");
+    const requestTls = {};
+    if (pinCurve) requestTls.ecdhCurve = TLS_ECDH_CURVE;
+    if (insecure) requestTls.rejectUnauthorized = false;
     const dispatcher = new ProxyAgent({
       uri: normalized,
       connect: EYEBALLS_CONNECT,
-      requestTls: { ecdhCurve: TLS_ECDH_CURVE, ...(insecure ? { rejectUnauthorized: false } : {}) },
+      requestTls,
     });
     proxyDispatchers.set(key, dispatcher);
   }
@@ -353,11 +413,14 @@ function isBodyReplaySafe(body) {
 }
 
 async function fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket = false) {
+  const hostname = hostnameOf(url);
+  // A host that already rejected the pinned curve list talks default curves only.
+  const usePinnedCurve = !(hostname && curveDemotedHosts.has(hostname));
   try {
     // Protocol adapters may need Node's HTTP/1 transport on the direct path.
     // Keep proxy/no-proxy resolution and strict-proxy enforcement here.
     if (!proxyUrl && options.directFetch) return await options.directFetch(url, options);
-    const dispatcher = await getDispatcher(proxyUrl, false, forceFreshSocket);
+    const dispatcher = await getDispatcher(proxyUrl, false, forceFreshSocket, usePinnedCurve);
     return await rawFetch(url, { ...options, dispatcher });
   } catch (err) {
     const isStrictSsl = options.strictTls === true || process.env.STRICT_SSL === "true" || process.env.STRICT_SSL === "1";
@@ -367,8 +430,16 @@ async function fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket = f
       }
       // ponytail: in-memory insecure agent fallback for self-signed MITM corporate/antivirus certs
       console.warn(`[ProxyFetch] TLS cert verification failed (${err.cause?.code || err.code}), retrying with insecure TLS: ${url}`);
-      const insecureDispatcher = await getDispatcher(proxyUrl, true, forceFreshSocket);
+      const insecureDispatcher = await getDispatcher(proxyUrl, true, forceFreshSocket, usePinnedCurve);
       return await rawFetch(url, { ...options, dispatcher: insecureDispatcher });
+    }
+
+    // The peer refused our ClientHello outright (alert 40), which is what an edge that
+    // dropped the pinned curve does. Nothing reached the upstream, so replaying is safe
+    // even for a streamed body. Demote the host and retry once with the default list.
+    if (usePinnedCurve && !CURVE_OVERRIDE_DISABLED && isHandshakeCurveRejection(err)) {
+      noteCurveHandshakeFailure(hostname);
+      return await fetchWithTlsFallback(url, options, proxyUrl, forceFreshSocket);
     }
 
     // Stale keep-alive recovery: a pooled socket died before returning headers. Replay

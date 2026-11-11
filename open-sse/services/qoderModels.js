@@ -26,6 +26,7 @@ import { createHash } from "crypto";
 
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { buildCosyHeaders } from "../shared/qoder/cosy.js";
+import { getQoderContextTiers } from "../shared/qoder/contextTier.js";
 import {
   QODER_IDE_VERSION,
   QODER_CLIENT_TYPE,
@@ -197,6 +198,21 @@ function cosyCredsFromConnection(credentials) {
 }
 
 /**
+ * The context window to advertise for one catalog entry.
+ *
+ * `max_input_tokens` carries the tier the IDE currently has selected (~180K by
+ * default), not the model's ceiling. The ceiling is the largest advertised
+ * `context_config` tier — 1M for models that offer it. Reporting the default tier
+ * under-advertises those models by ~5x, the same way trae's `dev` tier did.
+ */
+export function qoderAdvertisedContextLength(entry) {
+  const tiers = getQoderContextTiers(entry);
+  const widestTier = tiers.length > 0 ? tiers[tiers.length - 1].tokenCount : 0;
+  const currentTier = Number(entry?.max_input_tokens) || 0;
+  return Math.max(widestTier, currentTier) || 131_072;
+}
+
+/**
  * Fetch the live model list for this credential. Returns:
  *   { models: [{ id, name, contextLength, isVL, isReasoning, ... }, ...],
  *     rawConfigs: Map<modelKey, modelConfigObject> }
@@ -265,7 +281,7 @@ async function fetchQoderCatalogRaw(credentials, signal, proxyOptions = null, re
     if (entry.enable === false) continue;
 
     const display = entry.display_name || key;
-    const ctx = Number(entry.max_input_tokens) || 131_072;
+    const ctx = qoderAdvertisedContextLength(entry);
     models.push({
       id: key,
       name: `${display}`,

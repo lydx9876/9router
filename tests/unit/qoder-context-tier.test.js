@@ -209,3 +209,42 @@ describe("routableQoderModels", () => {
     expect(routableQoderModels(null)).toEqual([]);
   });
 });
+
+describe("advertised contextLength", () => {
+  it("reports the widest tier, not the currently selected one", async () => {
+    // `max_input_tokens` is the tier the IDE has selected (~180K by default), not the
+    // model's ceiling. Reporting it under-advertises a 1M model by ~5x — the same
+    // failure trae had with its `dev` tier.
+    const { qoderAdvertisedContextLength } = await import("../../open-sse/services/qoderModels.js");
+    const ctx = qoderAdvertisedContextLength({
+      key: "qmodel_38max",
+      max_input_tokens: 180_000,
+      context_config: [
+        { name: "200K", tokenCount: 200_000, isDefault: true },
+        { name: "400K", tokenCount: 400_000 },
+        { name: "1M", tokenCount: 1_000_000 },
+      ],
+    });
+    expect(ctx).toBe(1_000_000);
+  });
+
+  it("falls back to max_input_tokens when no tiers are advertised", async () => {
+    const { qoderAdvertisedContextLength } = await import("../../open-sse/services/qoderModels.js");
+    expect(qoderAdvertisedContextLength({ max_input_tokens: 200_000 })).toBe(200_000);
+  });
+
+  it("never reports less than the currently selected tier", async () => {
+    // A catalog could publish tiers that all sit below the active one; the active
+    // one is demonstrably usable, so it wins.
+    const { qoderAdvertisedContextLength } = await import("../../open-sse/services/qoderModels.js");
+    expect(qoderAdvertisedContextLength({
+      max_input_tokens: 500_000,
+      context_config: [{ name: "200K", tokenCount: 200_000 }],
+    })).toBe(500_000);
+  });
+
+  it("defaults when the entry carries no sizes at all", async () => {
+    const { qoderAdvertisedContextLength } = await import("../../open-sse/services/qoderModels.js");
+    expect(qoderAdvertisedContextLength({})).toBe(131_072);
+  });
+});

@@ -44,15 +44,18 @@ const entry = (over = {}) => ({
 });
 
 describe("TRAE CN context window", () => {
-  it("takes dev, not max", () => {
-    // `max` requires the account to have max_mode enabled; advertising 1M when the
-    // account can only use 256k produces requests upstream rejects.
-    expect(traeCnContextWindow({ dev: 256000, max: 1000000 })).toBe(256000);
-    expect(traeCnContextWindow({ dev: 200000 })).toBe(200000);
+  it("takes max, not dev", () => {
+    // `max` is the real window and `dev` is the tier the IDE uses when Max is off.
+    // Verified: a 400K prompt is accepted on solo_agent_remote, past the dev tier's
+    // 168K `prompt_max_tokens`. Preferring `dev` under-reported these by ~5x.
+    expect(traeCnContextWindow({ dev: 256000, max: 1000000 })).toBe(1000000);
+    expect(traeCnContextWindow({ dev: 200000, max: 1000000 })).toBe(1000000);
   });
 
-  it("falls back to max only when dev is absent", () => {
-    expect(traeCnContextWindow({ max: 128000 })).toBe(128000);
+  it("falls back to dev when max is absent", () => {
+    // The lite channel publishes only `{dev: N}` — that is genuinely its ceiling.
+    expect(traeCnContextWindow({ dev: 200000 })).toBe(200000);
+    expect(traeCnContextWindow({ dev: 200000, max: 0 })).toBe(200000);
     expect(traeCnContextWindow(null)).toBeNull();
     expect(traeCnContextWindow({})).toBeNull();
   });
@@ -94,6 +97,15 @@ describe("TRAE CN model normalization", () => {
     expect(m.invisibleToUser).toBe(true);
   });
 
+  it("reports the widest tier's output limit, not index 0", () => {
+    // `model_detail_list` is one entry per tier (`__dev` then `__max`). Index 0 is
+    // `__dev` and reports 32K where `__max` allows 64K.
+    const m = normalizeTraeCnModel(entry({
+      model_detail_list: [{ max_tokens: 32000 }, { max_tokens: 64000 }],
+    }), "solo_agent_remote");
+    expect(m.maxOutputTokens).toBe(64000);
+  });
+
   it("drops custom models and internal entries", () => {
     expect(normalizeTraeCnModel(entry({ display_config: { is_custom_model: true } }), "x")).toBeNull();
     expect(normalizeTraeCnModel(entry({ config_name: "title_generation" }), "x")).toBeNull();
@@ -108,12 +120,39 @@ describe("TRAE CN channel routing", () => {
     expect(resolveTraeCnChannel("never-seen-model")).toBe(TRAE_CN_CHANNELS[0]);
   });
 
-  it("prefers the higher-priority channel when a model appears on both", async () => {
-    // Same model listed twice must resolve deterministically, not randomly.
+  it("picks the channel that offers the wider context when a model appears on both", async () => {
+    // A model on both channels is NOT interchangeable: the lite entry exposes only
+    // the `__dev` tier while the agent entry carries `__max` with a 1M window.
+    // Keeping whichever the catalog listed first cost 22 models ~5x their window.
     const fetchImpl = async () => new Response(JSON.stringify({
       function_configs: [
-        { function: "solo_work_lite", config_info_list: [entry()] },
+        {
+          function: "solo_work_lite",
+          config_info_list: [entry({ context_window_tokens: { dev: 200000 } })],
+        },
+        {
+          function: "solo_agent_remote",
+          config_info_list: [entry({ context_window_tokens: { dev: 200000, max: 1000000 } })],
+        },
+      ],
+    }), { status: 200 });
+
+    const res = await resolveTraeCnModels(
+      { apiKey: makeJwt({ data: { id: UID } }) },
+      { forceRefresh: true, fetchImpl },
+    );
+    expect(res.models).toHaveLength(1);
+    expect(res.models[0].channel).toBe("solo_agent_remote");
+    expect(res.models[0].contextWindow).toBe(1000000);
+    expect(resolveTraeCnChannel("glm-5.3")).toBe("solo_agent_remote");
+  });
+
+  it("breaks a genuine tie by channel priority", async () => {
+    // Same window on both channels: still deterministic, not order-dependent.
+    const fetchImpl = async () => new Response(JSON.stringify({
+      function_configs: [
         { function: "solo_agent_remote", config_info_list: [entry()] },
+        { function: "solo_work_lite", config_info_list: [entry()] },
       ],
     }), { status: 200 });
 
@@ -123,7 +162,6 @@ describe("TRAE CN channel routing", () => {
     );
     expect(res.models).toHaveLength(1);
     expect(res.models[0].channel).toBe("solo_work_lite");
-    expect(resolveTraeCnChannel("glm-5.3")).toBe("solo_work_lite");
   });
 
   it("routes an agent-only model to the agent channel", async () => {

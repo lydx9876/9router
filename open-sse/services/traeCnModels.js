@@ -70,17 +70,20 @@ export function isInternalTraeCnModel(name) {
  * `context_window_tokens` is an object: `{dev: 200000}` or
  * `{dev: 256000, max: 1000000}`.
  *
- * `max` requires the account to have `max_mode` enabled; believing it would make
- * 9router advertise a window the account cannot use and emit requests upstream
- * rejects. `dev` is the honest number.
+ * `max` is the real window. An earlier version preferred `dev`, assuming `max`
+ * needed an account flag to be usable — that was wrong. Verified against the CN
+ * endpoint: a 400K-token prompt is accepted on `solo_agent_remote`, well past the
+ * `dev` tier's 168K `prompt_max_tokens`. `dev` is the tier the IDE uses when Max
+ * is off, not a hard ceiling, so preferring it under-reported every model that has
+ * a `__max` tier by roughly 5x.
  */
 export function traeCnContextWindow(raw) {
   if (typeof raw === "number") return raw > 0 ? raw : null;
   if (!raw || typeof raw !== "object") return null;
-  const dev = Number(raw.dev);
-  if (Number.isFinite(dev) && dev > 0) return dev;
   const max = Number(raw.max);
-  return Number.isFinite(max) && max > 0 ? max : null;
+  if (Number.isFinite(max) && max > 0) return max;
+  const dev = Number(raw.dev);
+  return Number.isFinite(dev) && dev > 0 ? dev : null;
 }
 
 /** Normalize one catalog entry, or null when it is not a user-selectable model. */
@@ -96,8 +99,15 @@ export function normalizeTraeCnModel(entry, channel) {
   // NOTE: `is_invisible_to_user` is deliberately NOT a filter. It marks models
   // hidden from the IDE's own picker, not models that cannot be called — several
   // work fine. Filtering on it drops roughly a third of the usable catalog.
-  const detail = Array.isArray(entry?.model_detail_list) ? entry.model_detail_list[0] : null;
-  const maxOutput = Number(detail?.max_tokens);
+  // `model_detail_list` holds one entry per tier (`__dev`, `__max`). The widest
+  // tier is the one whose limits actually apply, so take the max across entries
+  // instead of trusting index 0 — index 0 is `__dev`, which reports 32K output
+  // where the `__max` tier allows 64K.
+  const details = Array.isArray(entry?.model_detail_list) ? entry.model_detail_list : [];
+  const maxOutput = details.reduce((acc, d) => {
+    const n = Number(d?.max_tokens);
+    return Number.isFinite(n) && n > acc ? n : acc;
+  }, 0);
 
   return {
     id,
@@ -205,23 +215,38 @@ export async function resolveTraeCnModels(credentials, options = {}) {
   if (!payload) return null;
 
   const groups = Array.isArray(payload.function_configs) ? payload.function_configs : [];
-  const seen = new Set();
   const models = [];
   const channels = new Map();
 
-  // Iterate in channel-priority order so the first channel listing a model wins.
+  // A model listed on both channels is NOT interchangeable between them. The
+  // `solo_work_lite` entry exposes only the `__dev` tier (200K, and its
+  // `max_mode` is false), while the same model on `solo_agent_remote` carries a
+  // `__max` tier with a 1M window. Picking whichever channel the list happened to
+  // visit first cost 22 models ~5x their real context. So collect every candidate
+  // first, then keep the widest one per model.
+  /** @type {Map<string, { model: object, channel: string }>} */
+  const best = new Map();
+  const consider = (entry, channelName) => {
+    const model = normalizeTraeCnModel(entry, channelName);
+    if (!model) return;
+    const prev = best.get(model.id);
+    // Tie-break on channel priority so the result is stable across catalog orders.
+    const rank = (c) => {
+      const i = TRAE_CN_CHANNELS.indexOf(c);
+      return i === -1 ? TRAE_CN_CHANNELS.length : i;
+    };
+    if (!prev || (model.contextWindow || 0) > (prev.model.contextWindow || 0) ||
+        ((model.contextWindow || 0) === (prev.model.contextWindow || 0) &&
+         rank(channelName) < rank(prev.channel))) {
+      best.set(model.id, { model, channel: channelName });
+    }
+  };
+
   for (const channelName of TRAE_CN_CHANNELS) {
     const group = groups.find((g) => String(g?.function || "").trim() === channelName);
     if (!group) continue;
-    const list = Array.isArray(group.config_info_list) ? group.config_info_list : [];
-    for (const entry of list) {
-      const model = normalizeTraeCnModel(entry, channelName);
-      if (!model) continue;
-      // Same model on both channels: keep the first (higher-priority) one.
-      if (seen.has(model.id)) continue;
-      seen.add(model.id);
-      models.push(model);
-      channels.set(model.id, channelName);
+    for (const entry of Array.isArray(group.config_info_list) ? group.config_info_list : []) {
+      consider(entry, channelName);
     }
   }
 
@@ -230,14 +255,14 @@ export async function resolveTraeCnModels(credentials, options = {}) {
   for (const group of groups) {
     const channelName = String(group?.function || "").trim();
     if (!channelName || TRAE_CN_CHANNELS.includes(channelName)) continue;
-    const list = Array.isArray(group.config_info_list) ? group.config_info_list : [];
-    for (const entry of list) {
-      const model = normalizeTraeCnModel(entry, channelName);
-      if (!model || seen.has(model.id)) continue;
-      seen.add(model.id);
-      models.push(model);
-      channels.set(model.id, channelName);
+    for (const entry of Array.isArray(group.config_info_list) ? group.config_info_list : []) {
+      consider(entry, channelName);
     }
+  }
+
+  for (const [id, { model, channel }] of best) {
+    models.push(model);
+    channels.set(id, channel);
   }
 
   if (models.length === 0) return null;

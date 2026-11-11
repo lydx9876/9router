@@ -27,6 +27,11 @@ import {
   registerTraeSession,
   getTraeSessionStatus,
   clearTraeSession,
+  startTraeCnProxy,
+  stopTraeCnProxy,
+  registerTraeCnSession,
+  getTraeCnSessionStatus,
+  clearTraeCnSession,
   startWindsurfProxy,
   stopWindsurfProxy,
   registerWindsurfSession,
@@ -145,6 +150,10 @@ export async function GET(request, { params }) {
         const result = await startTraeProxy();
         return NextResponse.json(result);
       }
+      if (provider === "trae-cn") {
+        const result = await startTraeCnProxy();
+        return NextResponse.json(result);
+      }
       if (provider === "windsurf") {
         const result = await startWindsurfProxy();
         return NextResponse.json(result);
@@ -188,6 +197,7 @@ export async function GET(request, { params }) {
       }
       let session;
       if (provider === "trae") session = getTraeSessionStatus(state);
+      else if (provider === "trae-cn") session = getTraeCnSessionStatus(state);
       else if (provider === "windsurf") session = getWindsurfSessionStatus(state);
       else if (provider === "zed") session = getZedSessionStatus(state);
       else if (provider === "xai") session = getXaiSessionStatus(state);
@@ -208,6 +218,7 @@ export async function GET(request, { params }) {
           return NextResponse.json(payload);
         }
         if (provider === "trae") clearTraeSession(state);
+        else if (provider === "trae-cn") clearTraeCnSession(state);
         else if (provider === "windsurf") clearWindsurfSession(state);
         else if (provider === "zed") clearZedSession(state);
         else if (provider === "xai") clearXaiSession(state);
@@ -219,6 +230,7 @@ export async function GET(request, { params }) {
 
     if (action === "stop-proxy") {
       if (provider === "trae") stopTraeProxy();
+      else if (provider === "trae-cn") stopTraeCnProxy();
       else if (provider === "windsurf") stopWindsurfProxy();
       else if (provider === "zed") stopZedProxy();
       else if (provider === "xai") stopXaiProxy();
@@ -368,9 +380,10 @@ export async function POST(request, { params }) {
       if (!state) return NextResponse.json({ error: "Missing state" }, { status: 400 });
       let ok = false;
       if (provider === "trae") ok = registerTraeSession({ state });
+      else if (provider === "trae-cn") ok = registerTraeCnSession({ state });
       else if (provider === "windsurf") ok = registerWindsurfSession({ state });
       else if (provider === "zed") ok = registerZedSession({ state, codeVerifier: body?.codeVerifier, systemId: body?.systemId });
-      else return NextResponse.json({ error: "register-session only supported for trae/windsurf/zed" }, { status: 400 });
+      else return NextResponse.json({ error: "register-session only supported for trae/trae-cn/windsurf/zed" }, { status: 400 });
       return NextResponse.json({ success: ok });
     }
 

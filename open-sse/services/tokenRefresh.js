@@ -150,7 +150,10 @@ const REFRESH_HANDLERS = {
   gcli: (c, log) => refreshXaiToken(c.refreshToken, log),
   "codebuddy-cn": (c, log) => refreshCodebuddyToken(c.refreshToken, log),
   "codebuddy-intl": (c, log) => refreshCodebuddyIntlToken(c.refreshToken, log),
-  trae: (c, log) => refreshTraeToken(c.refreshToken, c, log),
+  trae: (c, log) => refreshTraeToken(c.refreshToken, c, log, "trae"),
+  // TRAE CN (www.trae.cn IDE) shares the ExchangeToken protocol but lives on a
+  // different host, and a token minted by one surface is rejected by the other.
+  "trae-cn": (c, log) => refreshTraeToken(c.refreshToken, c, log, "trae-cn"),
   cline: (c, log) => refreshClineToken(c.refreshToken, log),
   // ClinePass shares Cline's WorkOS auth endpoints, so the same refresh works.
   clinepass: (c, log) => refreshClineToken(c.refreshToken, log),

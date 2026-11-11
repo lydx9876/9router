@@ -27,6 +27,11 @@ export default function NewProviderPage() {
     isActive: true,
   });
   const [codeartsData, setCodeartsData] = useState({ accessKeyId: "", secretAccessKey: "" });
+  // TRAE CN takes a pasted Cloud-IDE-JWT plus the refreshToken issued with it.
+  // Both are needed: the JWT is short-lived (~8h) and the refreshToken is what
+  // renews it. There is no OAuth flow to drive — the IDE's callback is its own
+  // loopback and returns IDE-private fields 9Router cannot reproduce.
+  const [traeCnData, setTraeCnData] = useState({ jwt: "", refreshToken: "" });
   const [errors, setErrors] = useState({});
 
   const handleChange = (field, value) => {
@@ -42,6 +47,9 @@ export default function NewProviderPage() {
     if (formData.authMethod === "api_key" && usesCodeartsCredentialForm) {
       if (!codeartsData.accessKeyId.trim()) newErrors.codeartsAk = "Access Key ID is required";
       if (!codeartsData.secretAccessKey.trim()) newErrors.codeartsSk = "Secret Access Key is required";
+    } else if (formData.authMethod === "api_key" && usesTraeCnCredentialForm) {
+      if (!traeCnData.jwt.trim()) newErrors.traeCnJwt = "Cloud-IDE-JWT is required";
+      else if (!traeCnData.jwt.trim().includes(".")) newErrors.traeCnJwt = "That does not look like a JWT";
     } else if (formData.authMethod === "api_key" && !formData.apiKey) {
       newErrors.apiKey = "API Key is required";
     }
@@ -68,6 +76,14 @@ export default function NewProviderPage() {
                 },
               }
             : {}),
+          ...(usesTraeCnCredentialForm
+            ? {
+                // The JWT goes into apiKey (the executor reads apiKey or accessToken);
+                // the refreshToken is a second credential the renew path needs.
+                apiKey: traeCnData.jwt.trim().replace(/^Cloud-IDE-JWT\s+/i, ""),
+                refreshToken: traeCnData.refreshToken.trim(),
+              }
+            : {}),
         }),
       });
 
@@ -86,6 +102,7 @@ export default function NewProviderPage() {
 
   const selectedProvider = AI_PROVIDERS[formData.provider];
   const usesCodeartsCredentialForm = selectedProvider?.credentialForm === "codearts";
+  const usesTraeCnCredentialForm = selectedProvider?.credentialForm === "trae-cn";
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -167,7 +184,7 @@ export default function NewProviderPage() {
           </div>
 
           {/* API Key Input */}
-          {formData.authMethod === "api_key" && !usesCodeartsCredentialForm && (
+          {formData.authMethod === "api_key" && !usesCodeartsCredentialForm && !usesTraeCnCredentialForm && (
             <Input
               label="API Key"
               type="password"
@@ -201,6 +218,30 @@ export default function NewProviderPage() {
                 error={errors.codeartsSk}
                 hint="将加密存储。请求时用 IAM SDK-HMAC-SHA256 签名。"
                 required
+              />
+            </div>
+          )}
+
+          {/* TRAE CN：粘贴 Cloud-IDE-JWT + refreshToken */}
+          {formData.authMethod === "api_key" && usesTraeCnCredentialForm && (
+            <div className="flex flex-col gap-3">
+              <Input
+                label="Cloud-IDE-JWT"
+                type="password"
+                placeholder="eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+                value={traeCnData.jwt}
+                onChange={(e) => setTraeCnData({ ...traeCnData, jwt: e.target.value })}
+                error={errors.traeCnJwt}
+                hint="Trae CN IDE 签发的 JWT（含或不含 Cloud-IDE-JWT 前缀都可）。uid 从 token 里自动解出，无需另填。"
+                required
+              />
+              <Input
+                label="refreshToken"
+                type="password"
+                placeholder="drt-... 或 IDE 凭据文件里的 refreshToken"
+                value={traeCnData.refreshToken}
+                onChange={(e) => setTraeCnData({ ...traeCnData, refreshToken: e.target.value })}
+                hint="选填但强烈建议填。JWT 约 8 小时过期；有 refreshToken 才能自动续期，否则过期后需重新粘贴。"
               />
             </div>
           )}

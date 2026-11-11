@@ -31,6 +31,7 @@ import { CodeBuddyExecutor } from "./codebuddy-cn.js";
 import { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
 import { CodeArtsExecutor } from "./codearts-cn.js";
 import TraeExecutor from "./trae.js";
+import TraeCnExecutor from "./trae-cn.js";
 import ZedExecutor from "./zed.js";
 import WindsurfExecutor from "./windsurf.js";
 import { DefaultExecutor } from "./default.js";
@@ -78,6 +79,7 @@ const executors = {
   "codebuddy-intl": new CodeBuddyIntlExecutor(),
   "codearts-cn": new CodeArtsExecutor(),
   trae: new TraeExecutor(),
+  "trae-cn": new TraeCnExecutor(),
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "minimax-code": new MinimaxCodeExecutor("minimax-code"),
@@ -150,6 +152,7 @@ export { CodeBuddyExecutor } from "./codebuddy-cn.js";
 export { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
 export { CodeArtsExecutor } from "./codearts-cn.js";
 export { default as TraeExecutor } from "./trae.js";
+export { default as TraeCnExecutor } from "./trae-cn.js";
 export { default as ZedExecutor } from "./zed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";

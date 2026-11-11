@@ -19,11 +19,15 @@ export default defineConfig({
     silent: false,
   },
   resolve: {
-    // Use array form so subpath aliases (e.g. "@/lib/db/index.js") resolve correctly.
-    alias: [
-      { find: /^open-sse\//, replacement: resolve(__dirname, "../open-sse") + "/" },
-      { find: "open-sse", replacement: resolve(__dirname, "../open-sse") },
-      { find: /^@\//, replacement: resolve(__dirname, "../src") + "/" },
-    ],
+    // Vite's array form matches `find` **literally** — a RegExp entry is accepted
+    // at config time but never matches, so every `@/…` import failed to resolve and
+    // any test touching src/ died with "Cannot find package '@/lib/…'". The string
+    // form resolves as a prefix, which is what these aliases need:
+    //   open-sse/foo.js → <repo>/open-sse/foo.js
+    //   @/lib/usageDb.js → <repo>/src/lib/usageDb.js
+    alias: {
+      "open-sse/": resolve(__dirname, "../open-sse") + "/",
+      "@/": resolve(__dirname, "../src") + "/",
+    },
   },
 });

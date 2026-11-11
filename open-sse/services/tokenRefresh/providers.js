@@ -616,24 +616,35 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
 
 // Trae refresh — POST ExchangeToken with JSON body {ClientID, RefreshToken, ClientSecret, UserID}.
 // Response: {Result: {AccessToken, RefreshToken, TokenType, ExpiresAt}}.
-export async function refreshTraeToken(refreshToken, credentials, log) {
+//
+// `provider` selects the OAuth block: `trae` is the intl SOLO surface and
+// `trae-cn` the CN IDE one. They share the exchange protocol but live on different
+// hosts, and a token minted by one is not accepted by the other.
+export async function refreshTraeToken(refreshToken, credentials, log, provider = "trae") {
   if (!refreshToken) return null;
-  const oauth = PROVIDER_OAUTH.trae || {};
+  const oauth = PROVIDER_OAUTH[provider] || PROVIDER_OAUTH.trae || {};
   const url = oauth.exchangeTokenUrl || oauth.tokenUrl;
   if (!url) {
-    log?.warn?.("TOKEN_REFRESH", "No Trae exchangeTokenUrl configured");
+    log?.warn?.("TOKEN_REFRESH", `No ${provider} exchangeTokenUrl configured`);
     return null;
   }
 
-  return dedupRefresh("trae", refreshToken, async () => {
+  return dedupRefresh(provider, refreshToken, async () => {
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "Trae/1.0.0 antigravity-cockpit-tools",
+      };
+      if (provider === "trae-cn") {
+        // The CN refresh-token grant expects an EMPTY x-cloudide-token. Omitting the
+        // header entirely, or sending the old access token, makes the server pick a
+        // different auth branch that demands an ECDSA device signature.
+        headers["x-cloudide-token"] = "";
+      }
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "User-Agent": "Trae/1.0.0 antigravity-cockpit-tools",
-        },
+        headers,
         body: JSON.stringify({
           ClientID: oauth.clientId || "ono9krqynydwx5",
           RefreshToken: refreshToken,
@@ -652,18 +663,32 @@ export async function refreshTraeToken(refreshToken, credentials, log) {
       }
 
       const payload = await response.json();
+      // CN answers HTTP 200 with a business error envelope, so `ok` alone is not
+      // success — an expired credential comes back here rather than as a 4xx.
+      const bizError = payload?.ResponseMetadata?.Error;
+      if (bizError) {
+        const detail = bizError?.Data?.["__Message.error"] || bizError?.Message || "unknown";
+        log?.error?.("TOKEN_REFRESH", `Trae refresh rejected: ${detail}`);
+        return { error: "invalid_grant" };
+      }
+
       const result = payload?.Result || payload?.result || payload;
-      const accessToken = result?.AccessToken || result?.accessToken;
+      // CN returns `Token`; the intl surface returns `AccessToken`. Reading only the
+      // latter silently discards a perfectly good CN refresh.
+      const accessToken = result?.Token || result?.AccessToken || result?.accessToken;
       if (!accessToken) {
-        log?.error?.("TOKEN_REFRESH", "Trae refresh returned no AccessToken", { payload });
+        log?.error?.("TOKEN_REFRESH", "Trae refresh returned no token", { payload });
         return null;
       }
 
       const newRefresh = result?.RefreshToken || result?.refreshToken || refreshToken;
-      const expiresAt = result?.ExpiresAt || result?.expiresAt;
+      const expiresAt = result?.TokenExpireAt || result?.ExpiresAt || result?.expiresAt;
       let expiresIn;
       if (typeof expiresAt === "number") {
-        expiresIn = Math.max(1, expiresAt - Math.floor(Date.now() / 1000));
+        // Guard the unit: ms timestamps are ~1000x larger than seconds.
+        expiresIn = expiresAt > 1e12
+          ? Math.max(1, Math.floor((expiresAt - Date.now()) / 1000))
+          : Math.max(1, expiresAt - Math.floor(Date.now() / 1000));
       } else if (typeof expiresAt === "string") {
         const ms = new Date(expiresAt).getTime() - Date.now();
         expiresIn = ms > 0 ? Math.floor(ms / 1000) : undefined;
@@ -679,6 +704,7 @@ export async function refreshTraeToken(refreshToken, credentials, log) {
         accessToken,
         refreshToken: newRefresh,
         expiresIn,
+        refreshExpireAt: result?.RefreshExpireAt || undefined,
       };
     } catch (error) {
       log?.error?.("TOKEN_REFRESH", `Error refreshing Trae token: ${error.message}`);
@@ -698,7 +724,7 @@ export function refreshZedToken() {
 // grant yields a fresh apiKey). Refresh handled out-of-band by the caller.
 // TODO(firebase): if short-lived Firebase JWT credentials must be refreshed,
 // re-run RegisterUser with the refreshed Firebase JWT (separate code path).
-export async function refreshWindsurfToken(credentials, log) {
+export async function refreshWindsurfToken(_credentials, log) {
   log?.info?.(
     "TOKEN_REFRESH",
     "windsurf: apiKey is long-lived (no refresh_token flow) — skipping"

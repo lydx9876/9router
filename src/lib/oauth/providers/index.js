@@ -26,6 +26,7 @@ import codebuddyCn from "./codebuddy-cn.js";
 import codebuddyIntl from "./codebuddy-intl.js";
 import kimchi from "./kimchi.js";
 import trae from "./trae.js";
+import traeCn from "./trae-cn.js";
 import windsurf from "./windsurf.js";
 import zed from "./zed.js";
 import glm from "./glm.js";
@@ -57,6 +58,7 @@ const PROVIDERS = {
   "codebuddy-intl": codebuddyIntl,
   kimchi,
   trae,
+  "trae-cn": traeCn,
   windsurf,
   zed,
   glm,

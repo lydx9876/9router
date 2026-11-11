@@ -1,6 +1,7 @@
 import http from "http";
 import { URL } from "url";
 import { CODEX_CONFIG, TRAE_CONFIG, WINDSURF_CONFIG, ZED_HOSTED_CONFIG } from "../constants/oauth.js";
+import { TRAE_CN_CONFIG } from "../constants/traeCn.js";
 
 // Loopback origin guard for local callback proxies.
 // Legit OAuth redirects are top-level navigations (no `Origin` header); a cross-site
@@ -536,6 +537,127 @@ export function stopTraeProxy() {
   if (traeProxyTimeout) { clearTimeout(traeProxyTimeout); traeProxyTimeout = null; }
   if (traeProxyServer) { traeProxyServer.close(); traeProxyServer = null; }
   traeProxyPort = null;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Trae CN dynamic-port proxy. Singleton session.
+//
+// Mirrors the Trae proxy above but for the CN surface, whose callback carries the
+// tokens directly as query params (no ?code=, no PKCE exchange). The callback is a
+// browser redirect, so the callback URL has to be a real origin the user's browser
+// can reach — a loopback port is the right default for local use, and the same
+// shape works behind a reverse proxy.
+// ───────────────────────────────────────────────────────────────────────────
+
+let traeCnProxyServer = null;
+let traeCnProxyTimeout = null;
+let traeCnProxyPort = null;
+let traeCnSession = null;
+
+export function registerTraeCnSession({ state }) {
+  if (!state) return false;
+  traeCnSession = { state, status: "pending", createdAt: Date.now() };
+  return true;
+}
+export function getTraeCnSessionStatus(state) {
+  if (!traeCnSession) return null;
+  if (state && traeCnSession.state !== state) return null;
+  return traeCnSession;
+}
+export function clearTraeCnSession(state) {
+  if (!state || (traeCnSession && traeCnSession.state === state)) traeCnSession = null;
+}
+
+export function startTraeCnProxy() {
+  return new Promise((resolve) => {
+    if (traeCnProxyServer) {
+      resolve({ success: true, port: traeCnProxyPort, callbackUrl: `http://127.0.0.1:${traeCnProxyPort}${TRAE_CN_CONFIG.callbackPath}` });
+      return;
+    }
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, "http://localhost");
+      if (url.pathname !== TRAE_CN_CONFIG.callbackPath && url.pathname !== "/callback") {
+        res.writeHead(404);
+        res.end("Not found");
+        return;
+      }
+      const session = traeCnSession;
+      if (!session) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(false, "No active Trae CN login session"));
+        return;
+      }
+      // Same anti-CSRF posture as the intl proxy: a real browser redirect sends no
+      // Origin, so an Origin header means someone else is poking this port.
+      if (!isLoopbackOrigin(req.headers.origin)) {
+        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(false, "Cross-origin callback rejected"));
+        return;
+      }
+      const cbState = url.searchParams.get("state");
+      if (cbState && session.state && cbState !== session.state) {
+        session.status = "error";
+        session.error = "Trae CN callback state mismatch";
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(false, session.error));
+        stopTraeCnProxy();
+        return;
+      }
+      // Pass the raw callback query through — the CN parser reads the tokens
+      // straight off it.
+      const rawCallback = `${url.pathname}?${url.searchParams.toString()}`;
+      try {
+        const { importTraeCnCredential } = await import("../providers/trae-cn.js");
+        const { createProviderConnection } = await import("@/models");
+        const cred = await importTraeCnCredential(rawCallback);
+        const connection = await createProviderConnection({
+          provider: "trae-cn",
+          authType: "apikey",
+          apiKey: cred.accessToken,
+          accessToken: cred.accessToken,
+          refreshToken: cred.refreshToken,
+          email: cred.email || undefined,
+          displayName: cred.displayName || undefined,
+          providerSpecificData: {
+            uid: cred.uid,
+            refreshToken: cred.refreshToken,
+            refreshExpireAt: cred.refreshExpireAt || null,
+            authMethod: cred.authMethod,
+            region: cred.region || "CN",
+          },
+          expiresAt: cred.expiresIn
+            ? new Date(Date.now() + cred.expiresIn * 1000).toISOString()
+            : null,
+          testStatus: "active",
+        });
+        session.status = "done";
+        session.connectionId = connection.id;
+        session.email = connection.email;
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(true, "Trae CN connected. You can close this window."));
+      } catch (err) {
+        session.status = "error";
+        session.error = err.message;
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(renderCodexResultPage(false, err.message));
+      } finally {
+        stopTraeCnProxy();
+      }
+    });
+    server.listen(0, "127.0.0.1", () => {
+      traeCnProxyServer = server;
+      traeCnProxyPort = server.address().port;
+      traeCnProxyTimeout = setTimeout(() => stopTraeCnProxy(), TRAE_CN_CONFIG.oauthTimeoutMs);
+      resolve({ success: true, port: traeCnProxyPort, callbackUrl: `http://127.0.0.1:${traeCnProxyPort}${TRAE_CN_CONFIG.callbackPath}` });
+    });
+    server.on("error", (err) => resolve({ success: false, reason: err.message }));
+  });
+}
+
+export function stopTraeCnProxy() {
+  if (traeCnProxyTimeout) { clearTimeout(traeCnProxyTimeout); traeCnProxyTimeout = null; }
+  if (traeCnProxyServer) { traeCnProxyServer.close(); traeCnProxyServer = null; }
+  traeCnProxyPort = null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

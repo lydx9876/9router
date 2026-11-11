@@ -39,15 +39,20 @@ export default {
       signupUrl: "https://www.trae.cn",
     },
   },
-  category: "apikey",
-  authModes: ["apikey"],
+  // OAuth category, not apikey: the panel shows the "Sign in with browser" action
+  // for providers in OAUTH_PROVIDERS or whose authModes include "oauth". Both modes
+  // are offered here — browser sign-in (yields a 180-day refresh token) and pasting
+  // a credential by hand (a bare JWT lasts ~8h with no renewal).
+  category: "oauth",
+  authModes: ["oauth", "apikey"],
+  hasOAuth: true,
   // Dedicated two-field credential form (JWT + refreshToken) instead of the generic
   // single API-key input — see providers/new/page.js::usesTraeCnCredentialForm.
   credentialForm: "trae-cn",
-  // The JWT is the credential; there is nothing to run an OAuth flow against.
   authHint:
-    "Paste the Cloud-IDE-JWT from the Trae CN IDE, and the refreshToken that comes with it. " +
-    "The uid is read from the token payload — no extra fields needed.",
+    "Sign in through the browser for a credential that renews for ~180 days, or paste a " +
+    "Cloud-IDE-JWT by hand (valid ~8h, no auto-renew). The uid is read from the token " +
+    "payload — no extra fields needed.",
   transport: {
     // Single-shot SSE endpoint (the intl SOLO entry uses a two-step session flow).
     baseUrl: "https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat",

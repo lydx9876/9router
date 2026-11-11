@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import PropTypes from "prop-types";
 import { Modal, Button, Input } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 // Providers using the dynamic-port local callback proxy.
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
-const PROXY_OAUTH_PROVIDERS = new Set(["trae", "windsurf", "zed"]);
+const PROXY_OAUTH_PROVIDERS = new Set(["trae", "trae-cn", "windsurf", "zed"]);
 
 // Providers offering a paste-token fallback (import-token flow).
 // UX warns if the IDE (which issues the token) is not installed.
@@ -20,6 +20,16 @@ const PASTE_TOKEN_PROVIDERS = {
     ideName: "Trae",
     ideOptional: true, // token can be grabbed from DevTools without the IDE
   },
+  "trae-cn": {
+    // CN tokens are not interchangeable with the intl surface, so the
+    // instructions point at the CN console specifically.
+    label: "Cloud-IDE-JWT",
+    instructions:
+      "Sign in at trae.cn, open DevTools → Network, copy either the Cloud-IDE-JWT token from a request's Authorization header, or the whole authorize callback URL if you have one. A bare token works for ~8 hours with no auto-renew; a callback URL also carries a refresh token, which lets 9Router renew for ~180 days.",
+    placeholder: "Paste Cloud-IDE-JWT or the authorize callback URL...",
+    ideName: "Trae CN",
+    ideOptional: true, // token can be copied from the browser without the IDE
+  },
   windsurf: {
     label: "Windsurf API key",
     instructions:
@@ -29,6 +39,21 @@ const PASTE_TOKEN_PROVIDERS = {
     ideOptional: false,
   },
 };
+
+/**
+ * Read a browser-only value without a setState-in-effect round trip.
+ *
+ * These values come from `window`, which does not exist during SSR, so they
+ * cannot be read while rendering. The previous approach — default state plus an
+ * effect that called setState — triggers a cascading render on mount. useSyncExternalStore
+ * is the sanctioned way to read from an external store like `window`: the server
+ * snapshot is used for hydration and the client snapshot after it, with no
+ * extra render.
+ */
+const noopSubscribe = () => () => {};
+function useClientValue(getSnapshot, serverSnapshot) {
+  return useSyncExternalStore(noopSubscribe, getSnapshot, () => serverSnapshot);
+}
 
 /**
  * OAuth Modal Component
@@ -65,20 +90,17 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
   const startOAuthFlowRef = useRef(null);
   const { copied, copy } = useCopyToClipboard();
 
-  // State for client-only values to avoid hydration mismatch
-  const [isLocalhost, setIsLocalhost] = useState(false);
-  const [placeholderUrl, setPlaceholderUrl] = useState("/callback?code=...");
+  // Browser-only values, read without a setState-in-effect cascade. The static
+  // snapshots are what the server renders, which keeps hydration consistent.
+  const isLocalhost = useClientValue(
+    () => window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1",
+    false,
+  );
+  const placeholderUrl = useClientValue(
+    () => `${window.location.origin}/callback?code=...`,
+    "/callback?code=...",
+  );
   const callbackProcessedRef = useRef(false);
-
-  // Detect if running on localhost (client-side only)
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setIsLocalhost(
-        window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-      );
-      setPlaceholderUrl(`${window.location.origin}/callback?code=...`);
-    }
-  }, []);
 
   // Define all useCallback hooks BEFORE the useEffects that reference them
 

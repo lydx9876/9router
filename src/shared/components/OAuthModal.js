@@ -7,7 +7,7 @@ import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 
 // Providers using the dynamic-port local callback proxy.
 // Browser OAuth: popup → auto callback → auto exchange → poll-status.
-const PROXY_OAUTH_PROVIDERS = new Set(["trae", "trae-cn", "windsurf", "zed"]);
+const PROXY_OAUTH_PROVIDERS = new Set(["trae", "trae-cn", "trae-intl", "windsurf", "zed"]);
 
 // Providers offering a paste-token fallback (import-token flow).
 // UX warns if the IDE (which issues the token) is not installed.
@@ -28,6 +28,16 @@ const PASTE_TOKEN_PROVIDERS = {
       "Sign in at trae.cn, open DevTools → Network, copy either the Cloud-IDE-JWT token from a request's Authorization header, or the whole authorize callback URL if you have one. A bare token works for ~8 hours with no auto-renew; a callback URL also carries a refresh token, which lets 9Router renew for ~180 days.",
     placeholder: "Paste Cloud-IDE-JWT or the authorize callback URL...",
     ideName: "Trae CN",
+    ideOptional: true, // token can be copied from the browser without the IDE
+  },
+  "trae-intl": {
+    // CN tokens are not interchangeable with the intl surface, so the
+    // instructions point at the CN console specifically.
+    label: "Cloud-IDE-JWT",
+    instructions:
+      "Sign in at trae.ai, open DevTools → Network, copy either the Cloud-IDE-JWT token from a request's Authorization header, or the whole authorize callback URL if you have one. A bare token works for ~8 hours with no auto-renew; a callback URL also carries a refresh token, which lets 9Router renew for ~180 days.",
+    placeholder: "Paste Cloud-IDE-JWT or the authorize callback URL...",
+    ideName: "Trae International",
     ideOptional: true, // token can be copied from the browser without the IDE
   },
   windsurf: {

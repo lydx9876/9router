@@ -33,9 +33,10 @@
 
 import { proxyAwareFetch } from "../../utils/proxyFetch.js";
 import { deriveTraeCnIdentity } from "../../utils/traeCnIdentity.js";
-import { traeCnUidFromToken, normalizeTraeCnToken } from "../../executors/trae-cn.js";
 
-const USAGE_URL = "https://api.trae.cn/trae/api/v2/pay/ide_user_ent_usage";
+import { TRAE_VARIANTS, traeCnUidFromToken, normalizeTraeCnToken } from "../../utils/traeVariants.js";
+
+const USAGE_URL = TRAE_VARIANTS.cn.usageUrl;
 const USER_AGENT = "VSCode 1.107.1 (TRAE SOLO CN)";
 
 function num(value) {
@@ -54,6 +55,10 @@ function endTimeToIso(value) {
 }
 
 export async function getTraeCnUsage(credentials = {}, proxyOptions = null, deps = {}) {
+  const variant = TRAE_VARIANTS[deps.variant || "cn"] || TRAE_VARIANTS.cn;
+  if (variant.usageAccounting === "usd") {
+    return getTraeIntlUsage(credentials, proxyOptions, deps);
+  }
   // `fetchImpl` is injectable so the handler can be tested without a network call.
   // proxyAwareFetch is passed in rather than reached for directly because that
   // module replaces globalThis.fetch on import, which makes stubbing the global
@@ -175,6 +180,142 @@ export async function getTraeCnUsage(credentials = {}, proxyOptions = null, deps
           total,
           unit: payload?.is_credits_billing === false ? "usd" : "credits",
         }
+      : null,
+  };
+}
+
+/**
+ * TRAE International usage.
+ *
+ * Completely different shape from CN, verified against a live account:
+ *
+ *   GET https://ug-normal.trae.ai/trae/api/v1/pay/user_current_entitlement_list
+ *
+ *   {
+ *     is_dollar_usage_billing: true,
+ *     user_entitlement_pack_list: [{
+ *       display_desc: "Free plan",
+ *       entitlement_base_info: {
+ *         end_time: 1796083199,              // unix SECONDS
+ *         quota: {
+ *           basic_usage_limit: 1,            // dollars
+ *           advanced_model_request_limit: 1000,
+ *           premium_model_fast_request_limit: 10,
+ *           premium_model_slow_request_limit: 50,
+ *           auto_completion_limit: 5000,
+ *         },
+ *       },
+ *       usage: { basic_usage_amount: 0.13167 },
+ *     }],
+ *   }
+ *
+ * Three differences from CN that make a shared implementation wrong:
+ *
+ *   1. No `usage_summary` at all — there is no server-provided total to trust, so
+ *      each allowance is reported on its own.
+ *   2. Accounting is dollars plus request-count limits, not credits. Rendering
+ *      `advanced_model_request_limit` as a credit balance would read as "1000
+ *      credits" when it is "1000 advanced-model calls".
+ *   3. The endpoint tolerates a bare authorization header — no device identity is
+ *      required (verified). Sending the derived identity is harmless but unnecessary.
+ */
+async function getTraeIntlUsage(credentials = {}, proxyOptions = null, deps = {}) {
+  const doFetch = deps.fetchImpl || proxyAwareFetch;
+  const token = normalizeTraeCnToken(credentials?.accessToken || credentials?.apiKey || "");
+  if (!token) {
+    return { message: "TRAE International credential not available (missing token)." };
+  }
+
+  let response;
+  try {
+    response = await doFetch(TRAE_VARIANTS.intl.usageUrl, {
+      method: "GET",
+      headers: {
+        authorization: `Cloud-IDE-JWT ${token}`,
+        "x-user-region": TRAE_VARIANTS.intl.userRegion,
+        "user-agent": USER_AGENT,
+        accept: "application/json",
+      },
+    }, proxyOptions);
+  } catch (err) {
+    return { message: `TRAE International usage request failed: ${err?.message || err}` };
+  }
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    return { message: `TRAE International usage returned non-JSON (HTTP ${response.status}).` };
+  }
+
+  if (payload?.code) {
+    const msg = payload.message || `error ${payload.code}`;
+    return { message: `TRAE International usage unavailable: ${msg}. Re-paste the credential if it has expired.` };
+  }
+  if (!response.ok) {
+    return { message: `TRAE International usage failed (HTTP ${response.status}).` };
+  }
+
+  const packs = Array.isArray(payload?.user_entitlement_pack_list) ? payload.user_entitlement_pack_list : [];
+  if (!packs.length) {
+    return { message: "TRAE International connected. No entitlement package found." };
+  }
+
+  const quotas = {};
+  let dollarUsed = 0;
+  let dollarTotal = 0;
+
+  for (const pack of packs) {
+    const base = pack?.entitlement_base_info || {};
+    const quota = base?.quota || {};
+    const usage = pack?.usage || {};
+    const packName = String(pack?.display_desc || "").trim() || "Plan";
+    const resetAt = endTimeToIso(base?.end_time ?? pack?.expire_time);
+
+    // Dollar allowance: the only field that behaves like a spendable balance.
+    const limit = Number(quota.basic_usage_limit);
+    const used = num(usage.basic_usage_amount);
+    if (Number.isFinite(limit) && limit > 0) {
+      dollarUsed += used;
+      dollarTotal += limit;
+      quotas[`${packName} (usage)`] = {
+        used,
+        total: limit,
+        unlimited: false,
+        resetAt,
+        recurring: true,
+        // Values are dollars; the panel must not render them as credits.
+        unit: "usd",
+      };
+    }
+
+    // Request-count allowances. These never "refill" mid-period, so they expire
+    // rather than reset.
+    const COUNT_QUOTAS = [
+      ["advanced_model_request_limit", "Advanced model calls"],
+      ["premium_model_fast_request_limit", "Premium fast calls"],
+      ["premium_model_slow_request_limit", "Premium slow calls"],
+      ["auto_completion_limit", "Auto-completion calls"],
+    ];
+    for (const [key, label] of COUNT_QUOTAS) {
+      const n = Number(quota[key]);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      // The API reports the limit but not consumption per counter, so these are
+      // shown as capacity only — inventing a "used" of 0 would look like "untouched"
+      // when it may simply be unreported.
+      quotas[`${label}`] = { used: 0, total: n, unlimited: false, resetAt, recurring: false, unit: "requests" };
+    }
+  }
+
+  if (!Object.keys(quotas).length) {
+    return { message: "TRAE International connected. Plan reports no usage limits." };
+  }
+
+  return {
+    plan: payload?.is_dollar_usage_billing ? "TRAE International (pay-as-you-go)" : "TRAE International",
+    quotas,
+    summary: dollarTotal > 0
+      ? { used: dollarUsed, total: dollarTotal, unit: "usd" }
       : null,
   };
 }

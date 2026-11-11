@@ -23,11 +23,14 @@
 
 import { createHash } from "crypto";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import { traeCnUidFromToken, normalizeTraeCnToken } from "../executors/trae-cn.js";
 import { deriveTraeCnIdentity } from "../utils/traeCnIdentity.js";
+import { TRAE_VARIANTS, traeCnUidFromToken, normalizeTraeCnToken } from "../utils/traeVariants.js";
 
-export const TRAE_CN_CATALOG_URL = "https://trae-api-cn.mchost.guru/api/ide/v1/batch_get_detail_param";
-const CATALOG_URL = TRAE_CN_CATALOG_URL;
+export const TRAE_CN_CATALOG_URL = TRAE_VARIANTS.cn.catalogUrl;
+/** Catalog URL per variant — CN and intl serve it on different hosts. */
+export function traeCatalogUrl(variant = "cn") {
+  return (TRAE_VARIANTS[variant] || TRAE_VARIANTS.cn).catalogUrl;
+}
 const USER_AGENT = "VSCode 1.107.1 (TRAE SOLO CN)";
 const FETCH_TIMEOUT_MS = 20_000;
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -47,7 +50,7 @@ export const TRAE_CN_CHANNELS = ["solo_work_lite", "solo_agent_remote"];
  * machinery models used for titling / summarizing / searching.
  */
 const INTERNAL_MODEL_PATTERN =
-  /(^|_)(subagent|sub_agent|search_agent|title_generation|input_optimization|file_search_agent)$|^(summary|explore_|custom_model_)/i;
+  /(^|_)(subagent|sub_agent|search_agent|title_generation|input_optimization|file_search_agent|laziness_detection|intent_detection|rerank)$|^(summary|laziness_|explore_|custom_model_)/i;
 
 /** @type {Map<string, { expiresAt: number, models: object[], channels: Map<string,string> }>} */
 const catalogCache = new Map();
@@ -115,11 +118,11 @@ function readToken(credentials) {
   return normalizeTraeCnToken(credentials?.accessToken || credentials?.apiKey || "");
 }
 
-function cacheKey(token) {
-  return createHash("sha256").update(`trae-cn:${token.slice(-32)}`).digest("hex");
+function cacheKey(token, variant = "cn") {
+  return createHash("sha256").update(`${variant}:${token.slice(-32)}`).digest("hex");
 }
 
-async function fetchCatalog(token, { proxyOptions = null, log, fetchImpl } = {}) {
+async function fetchCatalog(token, { proxyOptions = null, log, fetchImpl, variant = "cn" } = {}) {
   // Injectable for tests: proxyFetch.js replaces globalThis.fetch on import, so
   // stubbing the global fetch after load does not intercept it.
   const doFetch = fetchImpl || proxyAwareFetch;
@@ -132,7 +135,7 @@ async function fetchCatalog(token, { proxyOptions = null, log, fetchImpl } = {})
   }
   const identity = deriveTraeCnIdentity(uid);
 
-  const res = await doFetch(CATALOG_URL, {
+  const res = await doFetch(traeCatalogUrl(variant), {
     method: "POST",
     headers: {
       authorization: `Cloud-IDE-JWT ${token}`,
@@ -185,7 +188,7 @@ export async function resolveTraeCnModels(credentials, options = {}) {
   const token = readToken(credentials);
   if (!token) return null;
 
-  const key = cacheKey(token);
+  const key = cacheKey(token, options.variant || "cn");
   const now = Date.now();
   if (!options.forceRefresh) {
     const cached = catalogCache.get(key);
@@ -239,9 +242,20 @@ export async function resolveTraeCnModels(credentials, options = {}) {
 
   if (models.length === 0) return null;
 
+  // On intl, most catalog entries answer `1005 {"plan":N}` — a subscription-tier
+  // gate, not a transient failure. Presenting them as selectable models means every
+  // pick on them fails, so the usable set is filtered to what was verified to answer
+  // on a free account. CN has no such gate, so this only applies to intl.
+  let usable = models;
+  if (options.variant === "intl") {
+    const allowed = new Set(TRAE_VARIANTS.intl.usableModelIds || []);
+    usable = models.filter((m) => allowed.has(m.id));
+  }
+  if (usable.length === 0) return null;
+
   for (const [id, ch] of channels) channelByModel.set(id, ch);
 
-  const entry = { expiresAt: Date.now() + CACHE_TTL_MS, models, channels };
+  const entry = { expiresAt: Date.now() + CACHE_TTL_MS, models: usable, channels };
   catalogCache.set(key, entry);
   return entry;
 }

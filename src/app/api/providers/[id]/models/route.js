@@ -364,6 +364,22 @@ const PROVIDER_MODELS_CONFIG = {
       };
     },
   },
+  "trae-intl": {
+    customResolver: async (connection) => {
+      const result = await resolveTraeCnModels({
+        accessToken: connection.accessToken,
+        apiKey: connection.apiKey,
+        providerSpecificData: connection.providerSpecificData || {},
+      }, { forceRefresh: true, log: console, variant: "intl" });
+      if (result?.models?.length) {
+        return { models: result.models };
+      }
+      return {
+        models: getStaticProviderModels("trae-intl"),
+        warning: "TRAE International returned no live models; falling back to static catalog.",
+      };
+    },
+  },
   cursor: {
     customResolver: async (connection) => {
       const result = await resolveCursorModels({

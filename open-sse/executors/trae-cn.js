@@ -3,6 +3,22 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { PROVIDERS } from "../config/providers.js";
 import { deriveTraeCnIdentity } from "../utils/traeCnIdentity.js";
 import { resolveTraeCnChannel } from "../services/traeCnModels.js";
+import {
+  TRAE_CN_APP_ID,
+  TRAE_CN_IDE_VERSION,
+  TRAE_CN_IDE_VERSION_CODE,
+  TRAE_CN_DEVICE_TYPE,
+  TRAE_CN_OS_VERSION,
+  TRAE_CN_DEVICE_BRAND,
+  TRAE_CN_USER_AGENT,
+  TRAE_VARIANTS,
+  traeCnUidFromToken,
+  normalizeTraeCnToken,
+  traeCnTokenExpiry,
+} from "../utils/traeVariants.js";
+
+// Re-exported for backwards compatibility with existing importers.
+export { traeCnUidFromToken, normalizeTraeCnToken, traeCnTokenExpiry };
 
 /**
  * TraeCnExecutor — talks to the Trae CN IDE surface (www.trae.cn).
@@ -46,42 +62,11 @@ import { resolveTraeCnChannel } from "../services/traeCnModels.js";
  * throttling but never clears. See utils/traeCnIdentity.js.
  */
 
-const TRAE_CN_APP_ID = "6eefa01c-1036-4c7e-9ca5-d891f63bfcd8";
-const TRAE_CN_IDE_VERSION = "0.1.52";
-const TRAE_CN_IDE_VERSION_CODE = "20260811";
-const TRAE_CN_DEVICE_TYPE = "macos";
-const TRAE_CN_OS_VERSION = "macOS 15.7.4";
-const TRAE_CN_DEVICE_BRAND = "Apple";
-// The user agent is load-bearing, not cosmetic. Controlled comparison against a live
-// account with every other header held constant: without it the upstream answers
-// {"code":4011,"message":"...exceeded the rate limit"} — the same misleading error
-// a wrong device identity produces, which sends people to hunt for a rate limit that
-// does not exist. With it, the request streams normally.
-const TRAE_CN_USER_AGENT = "VSCode 1.107.1 (TRAE SOLO CN)";
+
 // Upstream always streams; ChatCore aggregates for non-stream clients (forceStream).
 // The channel for a model comes from the live catalog (services/traeCnModels.js) —
 // it is per-model, not a global default, so there is no fallback constant here.
 
-/** Pull the uid out of a Cloud-IDE-JWT. Throws with a readable reason when absent. */
-export function traeCnUidFromToken(token) {
-  const raw = normalizeTraeCnToken(token);
-  if (!raw) throw new Error("trae-cn: empty token");
-  const parts = raw.split(".");
-  if (parts.length < 2) {
-    throw new Error("trae-cn: credential is not a Cloud-IDE-JWT (expected 3 dot-separated segments)");
-  }
-  let payload;
-  try {
-    payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-  } catch {
-    throw new Error("trae-cn: credential payload is not decodable JSON");
-  }
-  const uid = payload?.data?.id;
-  if (!uid) {
-    throw new Error("trae-cn: credential payload has no data.id (uid) — re-copy the token from the IDE");
-  }
-  return String(uid);
-}
 
 /**
  * Translate an upstream error into something a caller can act on.
@@ -91,47 +76,29 @@ export function traeCnUidFromToken(token) {
  * means the model is not available on the channel the request used — a routing
  * problem, not a formatting one.
  */
-export function explainTraeCnError(err, model) {
+export function explainTraeCnError(err, model, label = "trae-cn") {
   const code = err?.code;
   const raw = err?.message || (err ? JSON.stringify(err) : "unknown error");
   if (code === 4001) {
-    return `trae-cn: model "${model}" is not available on this channel (upstream 4001). The model is probably served by a different channel; refresh the model list so its channel is resolved.`;
+    return `${label}: model "${model}" is not available on this channel (upstream 4001). The model is probably served by a different channel; refresh the model list so its channel is resolved.`;
   }
   if (code === 4011) {
-    return `trae-cn: upstream answered 4011. This is either a device-identity mismatch or a missing IDE user agent — not necessarily rate limiting, despite the wording (${raw}).`;
+    return `${label}: upstream answered 4011. This is either a device-identity mismatch or a missing IDE user agent — not necessarily rate limiting, despite the wording (${raw}).`;
   }
   if (code === 1001) {
-    return `trae-cn: credential rejected (1001). It has probably expired — re-paste the Cloud-IDE-JWT.`;
+    return `${label}: credential rejected (1001). It has probably expired — re-paste the Cloud-IDE-JWT.`;
   }
-  return `trae-cn ${code ?? ""}: ${raw}`.trim();
+  if (code === 1005) {
+    // The intl surface gates models by subscription tier. The body carries the
+    // required tier, e.g. {"plan":4}; reporting this as a generic error would make
+    // it look like a transient fault instead of an account limitation.
+    const tier = String(err?.extra || err?.message || "").match(/plan"?\s*[:=]\s*(\d+)/i)?.[1];
+    return `${label}: this model needs a higher subscription tier (upstream 1005${tier ? `, requires plan ${tier}` : ""}). It is available to your account only on a different channel, or not at all.`;
+  }
+  return `${label} ${code ?? ""}: ${raw}`.trim();
 }
 
-/**
- * Strip an optional `Cloud-IDE-JWT ` scheme prefix and all whitespace.
- *
- * The IDE hands users the whole header value, and it is natural to paste it that
- * way, so accept both forms rather than rejecting a correct token. Whitespace is
- * removed rather than merely trimmed because a wrapped line from a terminal or a
- * clipboard inserts a newline mid-token, which otherwise surfaces as an opaque
- * JSON parse error on the payload.
- */
-export function normalizeTraeCnToken(token) {
-  return String(token || "")
-    .replace(/\s+/g, "")
-    .replace(/^Cloud-IDE-JWT/i, "");
-}
 
-/** Expiry (ms epoch) from a JWT, or null. */
-export function traeCnTokenExpiry(token) {
-  try {
-    const parts = normalizeTraeCnToken(token).split(".");
-    if (parts.length < 2) return null;
-    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-    return typeof payload?.exp === "number" ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * OpenAI content (string or block array) → TRAE's typed block array.
@@ -241,12 +208,18 @@ export function buildTraeCnMessages(messages) {
  * TraeCnExecutor
  */
 export default class TraeCnExecutor extends BaseExecutor {
-  constructor() {
-    super("trae-cn", PROVIDERS["trae-cn"]);
+  /**
+   * @param {string} variant  "cn" | "intl" — selects hosts and usage accounting.
+   *   Defaults to "cn" so existing wiring is untouched.
+   */
+  constructor(variant = "cn") {
+    super(variant === "intl" ? "trae-intl" : "trae-cn", PROVIDERS[variant === "intl" ? "trae-intl" : "trae-cn"]);
+    this.variant = TRAE_VARIANTS[variant] || TRAE_VARIANTS.cn;
+    this.variantKey = variant;
   }
 
   baseUrl() {
-    return (this.config?.baseUrl || "https://trae-api-cn.mchost.guru/api/agent/v3/llm_utils_chat").replace(/\/$/, "");
+    return (this.config?.baseUrl || this.variant.chatUrl).replace(/\/$/, "");
   }
 
   /** Credentials → { token, uid, identity }. Token may be on apiKey or accessToken. */
@@ -274,6 +247,7 @@ export default class TraeCnExecutor extends BaseExecutor {
       "x-machine-id": identity.machineId,
       "x-device-id": identity.deviceId,
       "request-traffic-type": "prod",
+      "x-user-region": this.variant.userRegion,
       "content-type": "application/json",
       "user-agent": TRAE_CN_USER_AGENT,
       accept: stream === false ? "application/json" : "text/event-stream",
@@ -541,7 +515,7 @@ export default class TraeCnExecutor extends BaseExecutor {
             model,
             choices: [],
             error: {
-              message: explainTraeCnError(upstreamError, model),
+              message: explainTraeCnError(upstreamError, model, this.variant.label),
               type: "api_error",
             },
           });

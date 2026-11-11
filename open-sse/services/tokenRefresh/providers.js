@@ -620,10 +620,26 @@ export async function refreshCodebuddyIntlToken(refreshToken, log) {
 // `provider` selects the OAuth block: `trae` is the intl SOLO surface and
 // `trae-cn` the CN IDE one. They share the exchange protocol but live on different
 // hosts, and a token minted by one is not accepted by the other.
+/**
+ * Where to send the Trae ExchangeToken request.
+ *
+ * CN answers on a fixed origin. Intl does not: its browser callback returns a
+ * regional auth host (e.g. https://api-sg-central.trae.ai) and the exchange only
+ * works against that host, so a value stored on the connection takes precedence.
+ */
+function resolveTraeExchangeUrl(oauth, credentials) {
+  const perConnection = credentials?.providerSpecificData?.authHost;
+  if (perConnection) {
+    const path = oauth.exchangeTokenPath || "/cloudide/api/v3/trae/oauth/ExchangeToken";
+    return `${String(perConnection).replace(/\/$/, "")}${path}`;
+  }
+  return oauth.exchangeTokenUrl || oauth.tokenUrl || null;
+}
+
 export async function refreshTraeToken(refreshToken, credentials, log, provider = "trae") {
   if (!refreshToken) return null;
   const oauth = PROVIDER_OAUTH[provider] || PROVIDER_OAUTH.trae || {};
-  const url = oauth.exchangeTokenUrl || oauth.tokenUrl;
+  const url = resolveTraeExchangeUrl(oauth, credentials);
   if (!url) {
     log?.warn?.("TOKEN_REFRESH", `No ${provider} exchangeTokenUrl configured`);
     return null;
@@ -636,7 +652,7 @@ export async function refreshTraeToken(refreshToken, credentials, log, provider 
         Accept: "application/json",
         "User-Agent": "Trae/1.0.0 antigravity-cockpit-tools",
       };
-      if (provider === "trae-cn") {
+      if (provider === "trae-cn" || provider === "trae-intl") {
         // The CN refresh-token grant expects an EMPTY x-cloudide-token. Omitting the
         // header entirely, or sending the old access token, makes the server pick a
         // different auth branch that demands an ECDSA device signature.

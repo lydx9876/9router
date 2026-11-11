@@ -79,7 +79,8 @@ const executors = {
   "codebuddy-intl": new CodeBuddyIntlExecutor(),
   "codearts-cn": new CodeArtsExecutor(),
   trae: new TraeExecutor(),
-  "trae-cn": new TraeCnExecutor(),
+  "trae-cn": new TraeCnExecutor("cn"),
+  "trae-intl": new TraeCnExecutor("intl"),
   zed: new ZedExecutor(),
   windsurf: new WindsurfExecutor(),
   "minimax-code": new MinimaxCodeExecutor("minimax-code"),
@@ -153,6 +154,7 @@ export { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
 export { CodeArtsExecutor } from "./codearts-cn.js";
 export { default as TraeExecutor } from "./trae.js";
 export { default as TraeCnExecutor } from "./trae-cn.js";
+export { TRAE_VARIANTS } from "./trae-cn.js";
 export { default as ZedExecutor } from "./zed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";

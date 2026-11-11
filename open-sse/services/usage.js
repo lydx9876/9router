@@ -65,6 +65,8 @@ const USAGE_HANDLERS = {
   "codearts-cn": (c) => getCodeArtsUsage(c.providerSpecificData, c.proxyOptions),
   // TRAE CN credits — read-only query, no claim/redeem call.
   "trae-cn": (c) => getTraeCnUsage(c, c.proxyOptions),
+  // Intl reports dollars + request-count allowances, not credits.
+  "trae-intl": (c) => getTraeCnUsage(c, c.proxyOptions, { variant: "intl" }),
   "grok-cli": (c) => getGrokCliUsage(c.accessToken, c.providerSpecificData, c.proxyOptions),
   kimi: (c) => getKimiUsage(c.accessToken, c.apiKey, c.proxyOptions, c.providerSpecificData),
   "opencode-go": (c) => getOpenCodeGoUsage(c.apiKey, c.proxyOptions),

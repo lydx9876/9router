@@ -154,6 +154,7 @@ const REFRESH_HANDLERS = {
   // TRAE CN (www.trae.cn IDE) shares the ExchangeToken protocol but lives on a
   // different host, and a token minted by one surface is rejected by the other.
   "trae-cn": (c, log) => refreshTraeToken(c.refreshToken, c, log, "trae-cn"),
+  "trae-intl": (c, log) => refreshTraeToken(c.refreshToken, c, log, "trae-intl"),
   cline: (c, log) => refreshClineToken(c.refreshToken, log),
   // ClinePass shares Cline's WorkOS auth endpoints, so the same refresh works.
   clinepass: (c, log) => refreshClineToken(c.refreshToken, log),

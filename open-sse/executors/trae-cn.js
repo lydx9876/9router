@@ -2,6 +2,7 @@ import { BaseExecutor } from "./base.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { PROVIDERS } from "../config/providers.js";
 import { deriveTraeCnIdentity } from "../utils/traeCnIdentity.js";
+import { resolveTraeCnChannel } from "../services/traeCnModels.js";
 
 /**
  * TraeCnExecutor — talks to the Trae CN IDE surface (www.trae.cn).
@@ -58,7 +59,8 @@ const TRAE_CN_DEVICE_BRAND = "Apple";
 // does not exist. With it, the request streams normally.
 const TRAE_CN_USER_AGENT = "VSCode 1.107.1 (TRAE SOLO CN)";
 // Upstream always streams; ChatCore aggregates for non-stream clients (forceStream).
-const DEFAULT_FUNCTION = "solo_work_lite";
+// The channel for a model comes from the live catalog (services/traeCnModels.js) —
+// it is per-model, not a global default, so there is no fallback constant here.
 
 /** Pull the uid out of a Cloud-IDE-JWT. Throws with a readable reason when absent. */
 export function traeCnUidFromToken(token) {
@@ -79,6 +81,29 @@ export function traeCnUidFromToken(token) {
     throw new Error("trae-cn: credential payload has no data.id (uid) — re-copy the token from the IDE");
   }
   return String(uid);
+}
+
+/**
+ * Translate an upstream error into something a caller can act on.
+ *
+ * `4001` is the one that matters: the upstream words it as "bad request", which
+ * reads like a malformed body and sends you off inspecting JSON. In practice it
+ * means the model is not available on the channel the request used — a routing
+ * problem, not a formatting one.
+ */
+export function explainTraeCnError(err, model) {
+  const code = err?.code;
+  const raw = err?.message || (err ? JSON.stringify(err) : "unknown error");
+  if (code === 4001) {
+    return `trae-cn: model "${model}" is not available on this channel (upstream 4001). The model is probably served by a different channel; refresh the model list so its channel is resolved.`;
+  }
+  if (code === 4011) {
+    return `trae-cn: upstream answered 4011. This is either a device-identity mismatch or a missing IDE user agent — not necessarily rate limiting, despite the wording (${raw}).`;
+  }
+  if (code === 1001) {
+    return `trae-cn: credential rejected (1001). It has probably expired — re-paste the Cloud-IDE-JWT.`;
+  }
+  return `trae-cn ${code ?? ""}: ${raw}`.trim();
 }
 
 /**
@@ -243,9 +268,14 @@ export default class TraeCnExecutor extends BaseExecutor {
   /** Build the upstream request body from the OpenAI-shaped body ChatCore hands us. */
   buildBody(model, body) {
     const messages = buildTraeCnMessages(body?.messages);
+    // The channel is not a free choice: a model is only callable on the channel
+    // that lists it, and the wrong one answers `4001 bad request`, which reads
+    // like a body-format error. resolveTraeCnChannel consults the live catalog;
+    // callers that already have a channel (from a resolved catalog) pass it in.
+    const channel = body?.function || resolveTraeCnChannel(model);
     const payload = {
       messages,
-      function: body?.function || DEFAULT_FUNCTION,
+      function: channel,
       // Upstream is stream-only.
       stream: true,
       config_name: model,
@@ -496,7 +526,7 @@ export default class TraeCnExecutor extends BaseExecutor {
             model,
             choices: [],
             error: {
-              message: `trae-cn ${upstreamError.code ?? ""}: ${upstreamError.message ?? JSON.stringify(upstreamError)}`,
+              message: explainTraeCnError(upstreamError, model),
               type: "api_error",
             },
           });

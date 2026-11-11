@@ -7,6 +7,7 @@ import { resolveOllamaLocalHost } from "open-sse/config/providers.js";
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
+import { resolveTraeCnModels } from "open-sse/services/traeCnModels.js";
 import { resolveQoderModels } from "open-sse/services/qoderModels.js";
 import { resolveGrokCliModels } from "open-sse/services/grokCliModels.js";
 import { resolveConnectionProxyConfig } from "@/lib/network/connectionProxy";
@@ -342,6 +343,26 @@ const PROVIDER_MODELS_CONFIG = {
         warning: "Kimchi returned no live models; falling back to static catalog.",
       };
     }
+  },
+  // TRAE CN: the catalog is the account's real model list, and it also yields the
+  // channel each model is served on. The static registry list is only a fallback —
+  // the live names differ and picking a non-existent one answers
+  // `model_config not yet known`.
+  "trae-cn": {
+    customResolver: async (connection) => {
+      const result = await resolveTraeCnModels({
+        accessToken: connection.accessToken,
+        apiKey: connection.apiKey,
+        providerSpecificData: connection.providerSpecificData || {},
+      }, { forceRefresh: true, log: console });
+      if (result?.models?.length) {
+        return { models: result.models };
+      }
+      return {
+        models: getStaticProviderModels("trae-cn"),
+        warning: "TRAE CN returned no live models; falling back to static catalog.",
+      };
+    },
   },
   cursor: {
     customResolver: async (connection) => {

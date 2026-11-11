@@ -1,0 +1,32 @@
+services:
+  # Local verification compose for the trae-cn provider.
+  #
+  # Differs from docker-compose.yml on purpose:
+  #  - builds from this working tree instead of pulling decolua/9router:latest,
+  #    because the upstream image does not contain the trae-cn provider
+  #  - publishes 20127 to match the dev port this repo uses
+  #  - drops the headroom sidecar; it is unrelated to provider testing and would
+  #    pull another image
+  9router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_VERSION: trae-cn-local
+    container_name: 9router-tcn
+    restart: "no"
+    ports:
+      - "20127:20127"
+    volumes:
+      - 9router-tcn-data:/app/data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20127"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production
+
+volumes:
+  9router-tcn-data:
+    name: 9router-tcn-data

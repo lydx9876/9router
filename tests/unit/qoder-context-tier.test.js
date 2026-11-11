@@ -248,3 +248,59 @@ describe("advertised contextLength", () => {
     expect(qoderAdvertisedContextLength({})).toBe(131_072);
   });
 });
+
+describe("context_config object form (what the live catalog actually sends)", () => {
+  /**
+   * The live catalog sends `context_config` as an OBJECT keyed by tier name, not
+   * an array:
+   *   {"1M": {"token_count": 1000000}, "200K": {"token_count": 200000, "is_default": true}}
+   * The array-only parser returned [] for every real account, which silently
+   * disabled escalation on all models: prompts past the 200K default were rejected
+   * upstream while the model's 1M window sat unused.
+   */
+  const LIVE_SHAPE = {
+    key: "dmodel",
+    max_input_tokens: 96000,
+    context_config: {
+      "1M": { token_count: 1_000_000 },
+      "200K": { token_count: 200_000, is_default: true },
+      "400K": { token_count: 400_000 },
+    },
+  };
+
+  it("parses the object form and uses the key as the tier name", () => {
+    const tiers = getQoderContextTiers(LIVE_SHAPE);
+    expect(tiers.map((t) => t.tokenCount)).toEqual([200_000, 400_000, 1_000_000]);
+    expect(tiers.map((t) => t.name)).toEqual(["200K", "400K", "1M"]);
+    expect(tiers.find((t) => t.isDefault).tokenCount).toBe(200_000);
+  });
+
+  it("escalates a prompt that outgrows the default tier", () => {
+    const prompt = promptOfTokens(500_000);
+    const choice = resolveQoderContextTier(LIVE_SHAPE, prompt, {});
+    expect(choice).not.toBeNull();
+    expect(choice.tier.tokenCount).toBe(1_000_000);
+  });
+
+  it("advertises the widest tier for this shape too", async () => {
+    const { qoderAdvertisedContextLength } = await import("../../open-sse/services/qoderModels.js");
+    expect(qoderAdvertisedContextLength(LIVE_SHAPE)).toBe(1_000_000);
+  });
+
+  it("still accepts the array form", () => {
+    const tiers = getQoderContextTiers({
+      context_config: [{ name: "200K", tokenCount: 200_000, isDefault: true }, { name: "1M", tokenCount: 1_000_000 }],
+    });
+    expect(tiers.map((t) => t.tokenCount)).toEqual([200_000, 1_000_000]);
+  });
+
+  it("accepts a bare number as a tier value", () => {
+    const tiers = getQoderContextTiers({ context_config: { "200K": 200_000, "1M": 1_000_000 } });
+    expect(tiers.map((t) => t.tokenCount)).toEqual([200_000, 1_000_000]);
+  });
+
+  it("returns [] for a model with no tiers", () => {
+    expect(getQoderContextTiers({ nope: 1 })).toEqual([]);
+    expect(getQoderContextTiers(null)).toEqual([]);
+  });
+});

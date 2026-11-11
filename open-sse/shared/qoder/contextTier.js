@@ -44,12 +44,30 @@ function tierName(entry, tokenCount) {
 /**
  * Normalize a model_config into sorted tiers: [{ name, tokenCount, isDefault }] ascending.
  * Accepts snake_case and camelCase shapes; returns [] when the model has no tiers.
+ *
+ * The live catalog sends `context_config` as an OBJECT keyed by tier name, not an
+ * array:
+ *   {"1M": {"token_count": 1000000},
+ *    "200K": {"token_count": 200000, "is_default": true},
+ *    "400K": {"token_count": 400000}}
+ * An earlier version required an array and so returned [] for every real account.
+ * That silently disabled tier escalation on all models — prompts past the 200K
+ * default were rejected upstream with the model's 1M window sitting unused. Both
+ * shapes are accepted here; the object key doubles as the tier name.
  */
 export function getQoderContextTiers(modelConfig) {
   const list = modelConfig?.context_config ?? modelConfig?.contextConfig;
-  if (!Array.isArray(list)) return [];
+  if (!list || typeof list !== "object") return [];
+
+  // Object form → [{ name, ...entry }]; array form passes through unchanged.
+  const entries = Array.isArray(list)
+    ? list
+    : Object.entries(list).map(([name, value]) =>
+        value && typeof value === "object" ? { name, ...value } : { name, token_count: value },
+      );
+
   const byCount = new Map();
-  for (const entry of list) {
+  for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     const tokenCount = parseTierTokenCount(
       entry.tokenCount ?? entry.token_count ?? entry.max_input_tokens ?? entry.maxInputTokens ?? entry.contextLength ?? entry.context_length,

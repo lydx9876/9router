@@ -188,6 +188,33 @@ export function buildTraeCnTool(tool) {
   return out;
 }
 
+/** Coerce tool-call arguments to the JSON string upstream expects. */
+function toTraeArguments(value) {
+  if (typeof value === "string") return value;
+  if (value == null) return "{}";
+  return JSON.stringify(value);
+}
+
+/**
+ * Assistant tool_calls → the upstream's own shape.
+ *
+ * The inner object must be `function_call`, not OpenAI's `function`. This is what
+ * the upstream emits, and it is the difference between a working second turn and
+ * `2001 ChatStream failed` — sending `function` here fails even before any tool
+ * result is involved.
+ */
+function buildTraeAssistantToolCalls(toolCalls) {
+  return toolCalls.map((tc, i) => ({
+    index: Number.isInteger(tc?.index) ? tc.index : i,
+    id: tc?.id || "",
+    type: "function",
+    function_call: {
+      name: tc?.function?.name || tc?.function_call?.name || "",
+      arguments: toTraeArguments(tc?.function?.arguments ?? tc?.function_call?.arguments),
+    },
+  }));
+}
+
 /** OpenAI messages → TRAE messages. */
 export function buildTraeCnMessages(messages) {
   const out = [];
@@ -202,20 +229,8 @@ export function buildTraeCnMessages(messages) {
       if (m.tool_call_id) entry.tool_call_id = String(m.tool_call_id);
       if (m.name) entry.name = String(m.name);
     }
-    // Assistant turns that called tools: pass the calls back so the model sees
-    // what it already asked for.
     if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-      entry.tool_calls = m.tool_calls.map((tc) => ({
-        id: tc?.id || "",
-        type: "function",
-        function: {
-          name: tc?.function?.name || "",
-          // arguments are already a JSON string in the OpenAI shape
-          arguments: typeof tc?.function?.arguments === "string"
-            ? tc.function.arguments
-            : JSON.stringify(tc?.function?.arguments ?? {}),
-        },
-      }));
+      entry.tool_calls = buildTraeAssistantToolCalls(m.tool_calls);
     }
     out.push(entry);
   }

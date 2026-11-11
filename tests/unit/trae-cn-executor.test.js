@@ -121,18 +121,41 @@ describe("TRAE CN request building", () => {
     expect(ex.buildBody("glm-5.3", { messages: [], stream: false }).stream).toBe(true);
   });
 
-  it("carries tool_call_id and prior tool_calls through a multi-turn exchange", () => {
+  it("emits history tool_calls as function_call, not OpenAI function", () => {
+    // This is the difference between a working second turn and `2001 ChatStream
+    // failed`. The upstream emits `function_call` in its own tool_calls frames and
+    // only accepts that shape back — sending OpenAI's `function` fails even with
+    // no tool result in the conversation yet.
+    const body = ex.buildBody("glm-5.3", {
+      messages: [
+        { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "f", arguments: '{"a":1}' } }] },
+      ],
+    });
+    const call = body.messages[0].tool_calls[0];
+    expect(call.function_call).toEqual({ name: "f", arguments: '{"a":1}' });
+    expect(call.function).toBeUndefined();
+    expect(call.id).toBe("c1");
+    expect(typeof call.index).toBe("number");
+  });
+
+  it("carries tool_call_id and the result through a multi-turn exchange", () => {
     const body = ex.buildBody("glm-5.3", {
       messages: [
         { role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "f", arguments: '{"a":1}' } }] },
         { role: "tool", tool_call_id: "c1", content: "done" },
       ],
     });
-    expect(body.messages[0].tool_calls[0]).toMatchObject({
-      id: "c1",
-      function: { name: "f", arguments: '{"a":1}' },
-    });
     expect(body.messages[1].tool_call_id).toBe("c1");
+    // Tool result content must be typed blocks. A bare string is accepted by the
+    // upstream without error but produces an empty reply, which reads as success.
+    expect(body.messages[1].content).toEqual([{ type: "text", text: "done" }]);
+  });
+
+  it("stringifies arguments that arrive as an object", () => {
+    const body = ex.buildBody("glm-5.3", {
+      messages: [{ role: "assistant", content: "", tool_calls: [{ id: "c1", function: { name: "f", arguments: { a: 1 } } }] }],
+    });
+    expect(body.messages[0].tool_calls[0].function_call.arguments).toBe('{"a":1}');
   });
 
   it("builds every header the upstream requires", () => {

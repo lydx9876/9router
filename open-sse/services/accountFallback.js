@@ -43,7 +43,11 @@ export function checkFallbackError(status, errorText, backoffLevel = 0, provider
       // credential's fault (e.g. qoder's model queue). It must not cool the
       // account down, but combo rotation should still advance to the next member.
       if (rule.requestScoped) return { shouldFallback: false, cooldownMs: 0, requestScoped: true };
-      return { shouldFallback: true, cooldownMs: rule.cooldownMs };
+      return {
+        shouldFallback: true,
+        cooldownMs: rule.cooldownMs,
+        modelScoped: Boolean(rule.modelScoped),
+      };
     }
 
     // Status-based rule: match HTTP status code

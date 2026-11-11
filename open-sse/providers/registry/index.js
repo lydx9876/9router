@@ -150,6 +150,7 @@ import p147 from "./veoaifree-web.js";
 import p151 from "./uc-web.js";
 import p152 from "./runcrate.js";
 import p153 from "./nace.js";
+import p156 from "./sensenova-intl.js";
 export default [
   p0,
   p1,
@@ -299,5 +300,6 @@ export default [
   p153,
   p154,
   p155,
+  p156,
   pTraeIntl,
 ];

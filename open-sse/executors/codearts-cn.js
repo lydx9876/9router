@@ -16,6 +16,54 @@ function uuidNoDashes() {
   return randomUUID().replace(/-/g, "");
 }
 
+const CODEARTS_USER_PROMPT_MAX_CHARS = 500;
+const BYTE_STRING_ASCII_RE = /^[\x20-\x7E]*$/;
+/**
+ * Mirror the CLI's `SM(n.prompt)` helper closely enough for the usage ledger:
+ * take the last user message, strip inline <system-reminder> blocks, and cap it.
+ * The official client puts this in body.user_prompt and mirrors it into
+ * x-user-prompt-label; without both the console files CLI traffic under the
+ * generic "后台任务 / unknown" bucket instead of showing the actual request.
+ */
+export function extractCodeArtsUserPrompt(body) {
+  let messages = [];
+  if (Array.isArray(body?.messages)) messages = body.messages;
+  else if (Array.isArray(body?.input)) messages = body.input;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const item = messages[i];
+    if (item?.role !== "user") continue;
+    let text = "";
+    if (typeof item.content === "string") {
+      text = item.content;
+    } else if (Array.isArray(item.content)) {
+      text = item.content
+        .map((part) => (typeof part === "string" ? part : part?.text || part?.content || ""))
+        .join("");
+    }
+    text = text
+      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return "";
+    return text.slice(0, CODEARTS_USER_PROMPT_MAX_CHARS);
+  }
+  return "";
+}
+
+/**
+ * HTTP header values must be ByteStrings (code points <= 255), and Node's fetch
+ * rejects Unicode labels outright. The body still carries the full Unicode
+ * user_prompt; only the optional mirror header has to stay ASCII-safe.
+ */
+function toCodeArtsHeaderLabel(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  if (BYTE_STRING_ASCII_RE.test(text)) return text;
+  // Keep a short human-readable ASCII prefix; never put Chinese text or em
+  // dashes in a header. The usage console still gets the full prompt in body.
+  return text.replace(/[^\x20-\x7E]/g, "?").slice(0, CODEARTS_USER_PROMPT_MAX_CHARS);
+}
+
 /**
  * 是否启用 SM4-GCM 加密的 chat 请求。
  *
@@ -187,7 +235,15 @@ export class CodeArtsExecutor extends DefaultExecutor {
     headers["x-ot-session-id"] = this.resolveUpstreamSessionId(providerSessionId);
     headers["user-session-id"] = headers["x-ot-session-id"];
     headers["x-ot-parent-session-id"] = "";
-    headers["user-msg-id"] = "";
+    // The console's usage ledger reads these to label a foreground user turn.
+    // Leaving them blank files CLI traffic as "后台任务 / unknown".
+    const userPrompt = extractCodeArtsUserPrompt(body);
+    const headerPromptLabel = toCodeArtsHeaderLabel(userPrompt);
+    const messageId = `msg_${uuidNoDashes()}`;
+    headers["user-msg-id"] = messageId;
+    headers["x-message-id"] = messageId;
+    if (headerPromptLabel) headers["x-user-prompt-label"] = headerPromptLabel;
+    headers["x-session-user-message"] = "true";
     headers["created-time"] = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
     headers["model-id"] = model || "";
     headers["model-name"] = model || "";
@@ -231,6 +287,10 @@ export class CodeArtsExecutor extends DefaultExecutor {
     const transformed = super.transformRequest(model, body, stream, credentials);
     // 码道是 SSE 流式端点，非流式请求会被拒（同 codebuddy-cn 的处理）
     transformed.stream = true;
+    // Official CLI sends this alongside the OpenAI-compatible messages array.
+    // The usage console uses it as the primary request label.
+    const userPrompt = extractCodeArtsUserPrompt(body);
+    if (userPrompt) transformed.user_prompt = userPrompt;
     return transformed;
   }
 
@@ -283,7 +343,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
    *   4. 用 AK/SK 重新签名（Content-Type 变成 application/octet-stream）
    *   5. body 发 base64(密文)
    */
-  async prepareOutgoingRequest({ headers, bodyStr, url, model, credentials, stream }) {
+  async prepareOutgoingRequest({ headers, bodyStr, url, credentials }) {
     if (!encryptedBodyEnabled()) {
       throw new Error(
         "codearts-cn: the encrypted request path is disabled " +
@@ -328,7 +388,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
    *
    * 解密后把 X-Encrypt-* 头删掉、Content-Type 改回 text/event-stream。
    */
-  async transformUpstreamResponse(response, { url, credentials }) {
+  async transformUpstreamResponse(response, { credentials }) {
     if (!encryptedBodyEnabled() || !isEncryptedResponse(response.headers)) {
       return response;
     }
@@ -404,7 +464,7 @@ export class CodeArtsExecutor extends DefaultExecutor {
   }
 
   async execute(params) {
-    const { model, body, stream, credentials, signal, providerSessionId } = params;
+    const { credentials, signal, providerSessionId } = params;
     const { accessKeyId } = this.getCredentials(credentials);
 
     // 拿不到凭据时不排队 —— 让 buildHeaders 抛出带说明的错误

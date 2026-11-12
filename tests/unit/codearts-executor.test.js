@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CodeArtsExecutor } from "../../open-sse/executors/codearts-cn.js";
+import { CodeArtsExecutor, extractCodeArtsUserPrompt } from "../../open-sse/executors/codearts-cn.js";
 import { PROVIDERS } from "../../open-sse/providers/index.js";
 
 const CREDENTIALS = {
@@ -58,6 +58,64 @@ describe("codearts-cn executor", () => {
       CREDENTIALS,
     );
     expect(body.stream).toBe(true);
+  });
+
+  it("extracts the last user prompt like the CLI's SM(n.prompt) helper", () => {
+    const prompt = "请先检查<system-reminder>忽略这段</system-reminder>  这个问题\n并给出结论";
+    const result = extractCodeArtsUserPrompt({
+      messages: [
+        { role: "user", content: "旧的" },
+        { role: "assistant", content: "上一轮" },
+        { role: "user", content: [{ type: "text", text: prompt }] },
+      ],
+    });
+    expect(result).toBe("请先检查 这个问题 并给出结论");
+  });
+
+  it("adds foreground-message labels used by the usage console", () => {
+    const executor = new CodeArtsExecutor();
+    const url = PROVIDERS["codearts-cn"].baseUrl;
+    const body = {
+      messages: [
+        { role: "user", content: "第一条" },
+        { role: "assistant", content: "回答" },
+        { role: "user", content: "你好啊" },
+      ],
+    };
+    const headers = executor.buildHeaders(CREDENTIALS, true, url, "deepseek-v4.1-flash-1017", body);
+    const transformed = executor.transformRequest(
+      "deepseek-v4.1-flash-1017",
+      { ...body, model: "deepseek-v4.1-flash-1017", stream: false },
+      false,
+      CREDENTIALS,
+    );
+
+    expect(headers["user-msg-id"]).toMatch(/^msg_[a-f0-9]{32}$/);
+    expect(headers["x-message-id"]).toBe(headers["user-msg-id"]);
+    // Header values must be ByteStrings; the Unicode prompt stays in the body.
+    expect(headers["x-user-prompt-label"]).toBe("???");
+    expect(headers["x-session-user-message"]).toBe("true");
+    expect(transformed.user_prompt).toBe("你好啊");
+    expect(transformed.stream).toBe(true);
+  });
+
+  it("keeps Unicode and em dashes out of HTTP header values", () => {
+    const executor = new CodeArtsExecutor();
+    const url = PROVIDERS["codearts-cn"].baseUrl;
+    const body = { messages: [{ role: "user", content: "测试 — 计划" }] };
+    const headers = executor.buildHeaders(CREDENTIALS, true, url, "deepseek-v4.1-flash-1017", body);
+    const transformed = executor.transformRequest(
+      "deepseek-v4.1-flash-1017",
+      { ...body, model: "deepseek-v4.1-flash-1017", stream: true },
+      true,
+      CREDENTIALS,
+    );
+
+    for (const [name, value] of Object.entries(headers)) {
+      expect(/[^\x00-\xFF]/.test(String(value)), `${name} must be a ByteString`).toBe(false);
+    }
+    expect(headers["x-user-prompt-label"]).toBe("?? ? ??");
+    expect(transformed.user_prompt).toBe("测试 — 计划");
   });
 
   it("fails loudly when AK/SK are missing instead of sending an unsigned request", () => {

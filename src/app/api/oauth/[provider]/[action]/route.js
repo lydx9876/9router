@@ -452,18 +452,25 @@ export async function POST(request, { params }) {
         }
       }
 
-      // Trae/Windsurf: code is either a raw callback URL or a pasted token.
+      // Trae / Windsurf: code is either a raw callback URL or a pasted token.
       // exchangeTokens() handles both paths; no PKCE, skip codex JWT extraction.
-      if (provider === "trae" || provider === "windsurf") {
+      // Trae CN/Intl must be here too: their callback carries refreshToken in
+      // the query and importTraeCnCredential() parses it directly. Falling
+      // through to the generic branch demands redirectUri/codeVerifier and
+      // answers "Missing required fields" when the user pastes the callback URL.
+      if (["trae", "trae-cn", "trae-intl", "windsurf"].includes(provider)) {
         const token = typeof code === "string" ? code.trim() : "";
         if (!token) {
           return NextResponse.json({ error: "Missing token or callback URL" }, { status: 400 });
         }
         try {
           const tokenData = await exchangeTokens(provider, token, null, null, state);
+          let authType = "oauth";
+          if (provider === "trae-cn" || provider === "trae-intl") authType = "apikey";
+          else if (provider === "windsurf") authType = "api_key";
           const connection = await createProviderConnection({
             provider,
-            authType: provider === "windsurf" ? "api_key" : "oauth",
+            authType,
             ...tokenData,
             expiresAt: tokenData.expiresIn
               ? new Date(Date.now() + tokenData.expiresIn * 1000).toISOString()

@@ -17,7 +17,13 @@ export const TRAE_CN_CONFIG = {
   exchangeTokenPath: "/cloudide/api/v3/trae/oauth/ExchangeToken",
   // Chat + model catalog host (different host again from the auth API).
   agentOrigin: "https://trae-api-cn.mchost.guru",
-  callbackPath: "/callback",
+  // The CN authorization page hard-codes this shape for `auth_callback_url`:
+  //   /^http:\/\/127\.0\.0\.1:(\d+)\/authorize$/
+  // With `/callback` the page immediately renders "登录失败 / 网络错误，请刷新页面重试"
+  // (its `invalidUrl` branch), before any sign-in API is called. The callback is
+  // a browser redirect to a loopback port, so the path only has to match here and
+  // in startTraeCnProxy — parseTraeCnCallback reads query params and ignores it.
+  callbackPath: "/authorize",
   // Values the CN authorization page requires verbatim. Verified: the page opens
   // and completes with exactly these.
   pluginVersion: "2.3.62834",

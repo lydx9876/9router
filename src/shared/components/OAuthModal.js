@@ -819,31 +819,46 @@ export default function OAuthModal({ isOpen, provider, providerInfo, onSuccess, 
             )}
 
             {authMode === "browser" && (
-              <>
+              <div className="space-y-3">
                 {step === "waiting" && (
                   <div className="flex items-center gap-2 px-3 py-2 border border-border rounded-lg bg-sidebar/50">
                     <span className="material-symbols-outlined text-base text-primary animate-spin">progress_activity</span>
                     <span className="text-sm">Waiting for browser authorization…</span>
                   </div>
                 )}
-                {step === "input" && (
-                  <div className="space-y-3">
-                    <p className="text-sm text-text-muted">
-                      Popup was blocked. After authorizing in the browser, paste the full callback URL here:
-                    </p>
-                    <Input
-                      value={callbackUrl}
-                      onChange={(e) => setCallbackUrl(e.target.value)}
-                      placeholder="http://127.0.0.1:.../callback?..."
-                      className="font-mono text-xs"
-                    />
-                    <div className="flex gap-2">
-                      <Button onClick={handleManualSubmit} fullWidth disabled={!callbackUrl}>Connect</Button>
-                      <Button onClick={handleClose} variant="ghost" fullWidth>Cancel</Button>
-                    </div>
-                  </div>
-                )}
-              </>
+                <p className="text-sm text-text-muted">
+                  If the popup did not open, or 9Router is running on a remote server, copy this URL into your browser:
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={authData?.authUrl || ""}
+                    className="font-mono text-xs"
+                  />
+                  <Button
+                    variant="secondary"
+                    icon={copied === "proxy_auth_url" ? "check" : "content_copy"}
+                    onClick={() => copy(authData?.authUrl, "proxy_auth_url")}
+                    disabled={!authData?.authUrl}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <p className="text-sm text-text-muted">
+                  After signing in, Trae redirects to a local <code>127.0.0.1:&lt;port&gt;/authorize?...</code> URL.
+                  Copy the full redirected URL from the address bar and paste it here:
+                </p>
+                <Input
+                  value={callbackUrl}
+                  onChange={(e) => setCallbackUrl(e.target.value)}
+                  placeholder="http://127.0.0.1:.../authorize?isRedirect=true&refreshToken=..."
+                  className="font-mono text-xs"
+                />
+                <div className="flex gap-2">
+                  <Button onClick={handleManualSubmit} fullWidth disabled={!callbackUrl}>Connect</Button>
+                  <Button onClick={handleClose} variant="ghost" fullWidth>Cancel</Button>
+                </div>
+              </div>
             )}
 
             {authMode === "paste-token" && PASTE_TOKEN_PROVIDERS[provider] && (

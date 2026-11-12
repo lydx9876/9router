@@ -83,6 +83,13 @@ describe("TRAE CN authorize URL", () => {
     expect(u.origin).toBe("https://www.trae.cn");
     expect(u.pathname).toBe("/authorization");
   });
+
+  it("uses the /authorize callback path the portal's invalidUrl guard requires", () => {
+    // The authorization page's client bundle rejects auth_callback_url unless it
+    // matches /^http:\/\/127\.0\.0\.1:(\d+)\/authorize$/: with /callback it
+    // renders "登录失败 / 网络错误，请刷新页面重试" before any sign-in API call.
+    expect(TRAE_CN_CONFIG.callbackPath).toBe("/authorize");
+  });
 });
 
 describe("TRAE CN callback parsing", () => {

@@ -13,6 +13,7 @@ const { AI_PROVIDERS, OAUTH_PROVIDERS, APIKEY_PROVIDERS } = await import("../../
 const registry = (await import("../../open-sse/providers/registry/index.js")).default;
 const { readFileSync } = await import("node:fs");
 const MODAL_SRC = readFileSync(new URL("../../src/shared/components/OAuthModal.js", import.meta.url), "utf8");
+const OAUTH_ROUTE_SRC = readFileSync(new URL("../../src/app/api/oauth/[provider]/[action]/route.js", import.meta.url), "utf8");
 
 describe("TRAE CN provider registration", () => {
   const provider = AI_PROVIDERS["trae-cn"];
@@ -81,5 +82,21 @@ describe("TRAE CN OAuth modal wiring", () => {
     const block = src.slice(src.indexOf("\"trae-cn\": {"), src.indexOf("\"trae-cn\": {") + 900);
     expect(block).toMatch(/~8 hours/);
     expect(block).toMatch(/~180 days/);
+  });
+
+  it("lets browser mode copy the authorization URL and paste the callback URL", () => {
+    // On a remote deployment the loopback callback cannot reach 9Router, so the
+    // user must be able to copy the auth URL and paste the final /authorize URL.
+    expect(src).toContain("proxy_auth_url");
+    expect(src).toContain("copy this URL into your browser");
+    expect(src).toContain("/authorize?isRedirect=true&refreshToken=...");
+  });
+});
+
+describe("TRAE CN manual callback exchange", () => {
+  it("routes pasted callback URLs through the raw-token exchange branch", () => {
+    // Without trae-cn here the generic branch demands redirectUri/codeVerifier
+    // and rejects the pasted callback URL with "Missing required fields".
+    expect(OAUTH_ROUTE_SRC).toMatch(/\["trae", "trae-cn", "trae-intl", "windsurf"\]\.includes\(provider\)/);
   });
 });

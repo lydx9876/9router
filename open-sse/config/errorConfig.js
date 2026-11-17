@@ -88,6 +88,16 @@ export const ERROR_RULES = [
   { status: 402, cooldownMs: COOLDOWN.long },
   { status: 403, cooldownMs: COOLDOWN.long },
   { status: 404, cooldownMs: COOLDOWN.long },
+  // A 502/504 most often comes from an upstream edge or CDN, not from the
+  // credential: Trae's gateway answers a 504 with an nginx HTML page when the
+  // model takes too long, and the request itself is fine on the next try. The
+  // generic 30s transient cooldown turned one slow request into a 30-second
+  // blackout of instant "reset after Ns" 503s, which is far worse than the
+  // original timeout on an agentic loop of back-to-back requests. A short pause
+  // keeps the account in rotation while still letting a genuinely struggling
+  // upstream breathe.
+  { status: 502, cooldownMs: COOLDOWN.short },
+  { status: 504, cooldownMs: COOLDOWN.short },
   { status: 429, backoff: true },
 ];
 

@@ -2,6 +2,27 @@
 import { STREAM_STALL_TIMEOUT_MS } from "../config/runtimeConfig.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
+// Silence longer than this while an SSE stream is open gets a `: ping` comment
+// so the client can tell the request is still alive. Providers can legitimately
+// produce no bytes for seconds (long reasoning, queued gateway), and a client
+// that sees nothing cannot distinguish "thinking" from "dead".
+// 0 disables the heartbeat.
+const STREAM_PING_INTERVAL_MS = (() => {
+  const raw = Number(process.env.STREAM_PING_INTERVAL_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 15000;
+})();
+const PING_FRAME = new TextEncoder().encode(": ping\n\n");
+
+// A silence longer than this in the raw upstream byte flow gets one log line in
+// production too, so a "feels stuck" report can be attributed: this tap sits
+// before the transform, so a long gap here is upstream latency, while smooth
+// arrivals with a silent client mean the gateway pipeline is at fault.
+// 0 disables the warning.
+const STREAM_GAP_WARN_MS = (() => {
+  const raw = Number(process.env.STREAM_GAP_WARN_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5000;
+})();
+
 // Get HH:MM:SS timestamp
 function getTimeString() {
   return new Date().toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -104,6 +125,42 @@ export function createDisconnectAwareStream(transformStream, streamController, o
   const writer = transformStream.writable.getWriter();
   let terminalEmitted = false;
 
+  // Heartbeat state. A client that receives nothing for seconds cannot tell a
+  // slow model from a dead connection, so silence gets a `: ping` SSE comment.
+  // It is only armed once a chunk proves this really is an SSE stream: for
+  // NDJSON or passthrough formats a comment would be malformed output.
+  let lastActivityAt = Date.now();
+  let pingTimer = null;
+  let closed = false;
+  let sseDetected = false;
+
+  const looksLikeSSE = (bytes) => {
+    if (!bytes || typeof bytes.byteLength !== "number") return false;
+    const head = new TextDecoder().decode(bytes.subarray(0, 64));
+    return head.startsWith("data:") || head.startsWith("event:") || head.startsWith("id:") || head.startsWith(":");
+  };
+
+  const stopPing = () => {
+    if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
+  };
+
+  const startPing = (controller) => {
+    if (pingTimer || STREAM_PING_INTERVAL_MS <= 0) return;
+    // Tick at a quarter of the interval so a ping lands close after the
+    // threshold is crossed rather than up to a full interval late.
+    const tick = Math.max(500, Math.floor(STREAM_PING_INTERVAL_MS / 4));
+    pingTimer = setInterval(() => {
+      if (closed || !sseDetected) return;
+      if (Date.now() - lastActivityAt < STREAM_PING_INTERVAL_MS) return;
+      try {
+        controller.enqueue(PING_FRAME);
+        lastActivityAt = Date.now();
+        dbg("STREAM", `keepalive ping after ${STREAM_PING_INTERVAL_MS}ms of silence`);
+      } catch { stopPing(); }
+    }, tick);
+    if (typeof pingTimer.unref === "function") pingTimer.unref();
+  };
+
   // Emit a synthesized terminal payload (e.g. Responses response.failed + [DONE]) once
   const emitTerminal = (controller) => {
     if (terminalEmitted || !onAbortTerminal) return;
@@ -115,8 +172,13 @@ export function createDisconnectAwareStream(transformStream, streamController, o
   };
 
   return new ReadableStream({
+    start(controller) {
+      startPing(controller);
+    },
     async pull(controller) {
       if (!streamController.isConnected()) {
+        closed = true;
+        stopPing();
         emitTerminal(controller);
         controller.close();
         return;
@@ -126,10 +188,17 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         const { done, value } = await reader.read();
 
         if (done) {
+          closed = true;
+          stopPing();
           streamController.handleComplete();
           controller.close();
           return;
         }
+        if (!sseDetected && looksLikeSSE(value)) {
+          sseDetected = true;
+          startPing(controller);
+        }
+        lastActivityAt = Date.now();
         controller.enqueue(value);
       } catch (error) {
         const wasConnected = streamController.isConnected();
@@ -240,6 +309,9 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
       lastChunkAt = now;
       if (isDebugEnabled && (chunkCount <= 5 || chunkCount % 20 === 0 || gap > 5000)) {
         dbg(tag, `chunk #${chunkCount} | size=${sz}B | gap=${gap}ms | total=${totalBytes}B`);
+      } else if (STREAM_GAP_WARN_MS > 0 && gap >= STREAM_GAP_WARN_MS) {
+        // Production-visible: upstream went silent this long mid-stream.
+        console.error(`[${getTimeString()}] ⏳ [STREAM] upstream silent ${gap}ms | chunk #${chunkCount} | total=${totalBytes}B`);
       }
       armStall();
       controller.enqueue(chunk);

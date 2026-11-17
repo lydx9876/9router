@@ -154,7 +154,6 @@ export { CodeBuddyIntlExecutor } from "./codebuddy-intl.js";
 export { CodeArtsExecutor } from "./codearts-cn.js";
 export { default as TraeExecutor } from "./trae.js";
 export { default as TraeCnExecutor } from "./trae-cn.js";
-export { TRAE_VARIANTS } from "./trae-cn.js";
 export { default as ZedExecutor } from "./zed.js";
 export { default as WindsurfExecutor } from "./windsurf.js";
 export { DevinCliExecutor } from "./devin-cli.js";
